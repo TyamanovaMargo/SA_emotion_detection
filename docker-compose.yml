@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  hr-assessment:
+    build: .
+    container_name: hr-assessment-pipeline
+    volumes:
+      # Mount audio data
+      - ./audio:/app/audio:ro
+      - ./Team Recordings:/app/Team Recordings:ro
+      # Mount output directories
+      - ./outputs:/app/outputs
+      - ./team_reports:/app/team_reports
+      # Mount .env file
+      - ./.env:/app/.env:ro
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+    # Allocate more memory for heavy models
+    mem_limit: 8g
+    shm_size: 2g
+    # Use all available CPUs
+    cpus: "4.0"
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    # Override default command
+    command: tail -f /dev/null
+
+  # Optional: API service
+  hr-assessment-api:
+    build: .
+    container_name: hr-assessment-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./.env:/app/.env:ro
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    mem_limit: 8g
+    shm_size: 2g
+    command: uvicorn api:app --host 0.0.0.0 --port 8000

@@ -1,0 +1,69 @@
+{
+  "candidate_id": "Mikhail_Tiurin_5_learn",
+  "position": "Team Member",
+  "transcript": "is for the time when i learned something new that changed my perspective on life i would say that it was in china when i've opened to myself the power of programming i mean python in this case and it was wonderful because it was the first time when i've tried to do something uh something like magic for me in that time so yeah it was experience never to forget so and i did learn a lot of things from trying to find the new sources to learn python and it was really cool time because it was the first time when i when i feel i felt like i can do a lot really a lot of things and And I was kind of professional. Yeah, that was the most important. And I mean, it was a border which divided my life in two parts.",
+  "assessment": {
+    "candidate_id": "Mikhail_Tiurin_5_learn",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate level of creativity and openness to new experiences"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 80,
+        "reason": "high level of organization and responsibility"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "moderate level of extraversion with a relatively low pitch mean"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 70,
+        "reason": "moderate to high level of agreeableness with a cooperative tone"
+      },
+      "neuroticism": {
+        "score": 20,
+        "confidence": 70,
+        "reason": "low level of neuroticism with a calm and stable tone"
+      }
+    },
+    "motivation": {
+      "overall_level": "High",
+      "pattern": "consistent across the answer",
+      "voice_indicators": [
+        "high energy level",
+        "moderate pitch variation",
+        "fast speech rate",
+        "clear articulation",
+        "reduced filler words"
+      ],
+      "content_indicators": [
+        "significant experience that changed their perspective",
+        "enthusiasm and excitement about learning programming",
+        "proactive language"
+      ]
+    },
+    "trait_strengths": [
+      "Conscientiousness",
+      "Openness",
+      "Motivation"
+    ],
+    "motivation_strengths": [
+      "High engagement signals",
+      "Persistent and determined tone",
+      "Enthusiasm for learning"
+    ],
+    "personality_development_areas": [
+      "emotional expressiveness and variability in speech"
+    ],
+    "motivation_development_areas": [
+      "sustaining motivation over time and in different contexts"
+    ],
+    "hr_summary": "The candidate demonstrates a high level of conscientiousness, a moderate level of openness, and a high motivation to learn and achieve. Their enthusiasm for learning and proactive tone suggest a strong fit for a role that requires responsibility, organization, and a willingness to learn and grow. However, the candidate may need to work on their emotional expressiveness and variability in their speech to ensure effective communication in a team-oriented environment."
+  }
+}

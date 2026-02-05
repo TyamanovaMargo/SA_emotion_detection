@@ -1,0 +1,35 @@
+{
+  "text": "About hobbies. I have a hobby. It's football and running. I like to exercise in order to improve my health. Running allows me to have fun as well as spend time with friends doing sport together. I like to study everything related to running, new equipment, scientific articles, various competitions. Running allows me, also start doing new sports such as triathlon or cycling.",
+  "duration": 37,
+  "traits": [
+    {
+      "trait": "Cooperation",
+      "score": 8,
+      "details": "The text mentions 'spend time with friends doing sport together' and 'interaction activities as team player', which indicates a willingness to engage in cooperative activities and a harmonious approach to interacting with others, suggesting a moderate level of cooperation."
+    },
+
+    {
+      "trait": "Openness to Experience",
+      "score": 14,
+      "details": "The text shows enthusiasm for new experiences, such as triathlon and cycling, and an interest in exploring related aspects, like new equipment and scientific articles, indicating an openness to exploring new possibilities and ideas."
+    },
+
+    {
+      "trait": "Assertiveness",
+      "score": 4,
+      "details": "While the text mentions exercising and competing, it does not convey a strong sense of taking charge or leading others, suggesting a relatively low level of assertiveness."
+    },
+
+    {
+      "trait": "Imagination",
+      "score": 2,
+      "details": "The text primarily focuses on practical activities and factual information, without any clear indications of creative thinking or preference for imaginative scenarios, suggesting a low level of imagination."
+    },
+
+    {
+      "trait": "Self-Efficacy",
+      "score": 10,
+      "details": "The text expresses a sense of control and confidence in one's abilities, as evident in the desire to improve health through exercise and explore new sports, indicating a moderate level of self-efficacy."
+    }
+  ]
+}

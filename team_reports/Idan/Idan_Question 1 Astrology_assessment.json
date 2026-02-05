@@ -1,0 +1,68 @@
+{
+  "candidate_id": "Idan_Idan_Question 1 Astrology",
+  "position": "Team Member",
+  "transcript": "I do not believe in astrology as a child I was I used to look on the astrology section on the newspaper, eh, but then I realize it's only totally in our head. So if you believe in astrology, you will see in the existence, you will see the fact. And if you don't believe Hey, it doesn't matter. So I specifically don't I don't believe in astrology, I think it's, it's nice. Maybe there is, I don't know something in it. I think, and the thing is that if you are you believe in it? And it's go inside your head so probably it's going to influence the actions that you are doing. This is my opinion, I think that if you I think about something and you can make it happen. And so everything's that, you all believe and you put inside your head. Eventually it will be outcome inactions, so this is my opinion, and that's it.",
+  "assessment": {
+    "candidate_id": "Idan_Idan_Question 1 Astrology",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate level of creativity and exploratory language"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 85,
+        "reason": "steady pace, low number of pauses, and clear articulation"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "moderate speech rate and relatively low pitch mean"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 75,
+        "reason": "cooperative tone, low pitch variance, and neutral emotional baseline"
+      },
+      "neuroticism": {
+        "score": 20,
+        "confidence": 80,
+        "reason": "stable pitch, low number of pauses, and calm/confident tone"
+      }
+    },
+    "motivation": {
+      "overall_level": "High",
+      "pattern": "Consistent across the answer",
+      "voice_indicators": [
+        "high energy level with a stable pitch",
+        "fast speech rate with moderate pauses",
+        "clear articulation and reduced filler words",
+        "neutral emotional baseline with a slight positive undertone"
+      ],
+      "content_indicators": [
+        "reflective and somewhat introspective statements",
+        "a proactive approach to personal beliefs and their influence on actions",
+        "future-oriented thinking implied by the discussion on the impact of beliefs on outcomes"
+      ]
+    },
+    "trait_strengths": [
+      "Conscientiousness",
+      "Openness",
+      "Agreeableness"
+    ],
+    "motivation_strengths": [
+      "High engagement signals",
+      "Persistent and determined tone",
+      "Positive outlook"
+    ],
+    "personality_development_areas": [
+      "developing more assertiveness or expressiveness in certain contexts"
+    ],
+    "motivation_development_areas": [
+      "developing strategies for maintaining motivation in the face of adversity"
+    ],
+    "hr_summary": "The candidate demonstrates a strong profile with high conscientiousness, moderate openness, and low neuroticism. Their high motivation level, indicated by their energetic and determined tone, suggests they would be highly engaged in their work. However, they may benefit from developing more assertiveness and strategies for maintaining motivation in challenging situations."
+  }
+}

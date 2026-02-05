@@ -1,0 +1,23 @@
+{
+  "person": "Mikhail",
+  "recordings_analyzed": 5,
+  "average_big_five": {
+    "openness": 60.0,
+    "conscientiousness": 80.0,
+    "extraversion": 50.0,
+    "agreeableness": 70.0,
+    "neuroticism": 22.0
+  },
+  "dominant_motivation": "Medium",
+  "motivation_distribution": {
+    "Medium": 4,
+    "High": 1
+  },
+  "common_strengths": [
+    "Openness",
+    "conscientiousness",
+    "Conscientiousness",
+    "agreeableness",
+    "Motivation"
+  ]
+}

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Output directories (will be mounted as volumes)
+outputs/
+team_reports/
+team_reports_lightweight/
+
+# Environment
+.env
+
+# Cache
+.cache/
+*.cache
+
+# Logs
+*.log
+
+# Test files
+tests/
+.pytest_cache/
+
+# Documentation
+docs/
+*.md
+!README.md

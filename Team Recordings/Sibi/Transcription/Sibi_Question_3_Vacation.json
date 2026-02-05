@@ -1,0 +1,31 @@
+{
+  "text": "When I had to select a vacation deal from several options, I focused on a few criteria to make my decision. First I considered the budget to ensure it was affordable. Next I looked at the destination and activities offered, making sure they aligned with my interests such as sightseeing and the local cuisine. I also checked reviews from other travellers to gauge the quality of the accommodation and the services offered. Finally, I verified the travel dates to ensure their fitness schedule. By prioritizing all these factors, I was able to choose a vacation deal that met my needs and expectations, resulting in a memorable and an enjoyable trip.",
+  "duration": 51,
+  "traits": [
+    {
+      "trait": "Imagination",
+      "score": 2,
+      "details": "The text lacks any mention of creative thinking, fantasy, or a preference for imaginative scenarios, instead focusing on practical details such as budget, destination, and reviews, indicating a more factual and practical approach."
+    },
+    {
+      "trait": "Openness to Experience",
+      "score": 12,
+      "details": "The text shows some openness to new experiences, such as trying local cuisine and sightseeing, but the focus on practical details and aligning with existing interests suggests a more moderate level of openness."
+    },
+    {
+      "trait": "Self-Efficacy",
+      "score": 16,
+      "details": "The text reflects confidence in making a decision based on carefully evaluating multiple factors, indicating a strong sense of personal efficacy and ability to manage challenges."
+    },
+    {
+      "trait": "Assertiveness",
+      "score": 4,
+      "details": "The text does not show any signs of taking charge or expressing opinions, instead focusing on personal decision-making and criteria, suggesting a more reserved approach."
+    },
+    {
+      "trait": "Cooperation",
+      "score": 6,
+      "details": "The text does not explicitly show willingness to work harmoniously with others or compromise, but the consideration of reviews and feedback from other travellers suggests some awareness of others' opinions and experiences."
+    }
+  ]
+}

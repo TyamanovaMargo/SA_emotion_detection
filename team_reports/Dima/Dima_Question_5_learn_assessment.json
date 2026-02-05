@@ -1,0 +1,69 @@
+{
+  "candidate_id": "Dima_Dima_Question_5_learn",
+  "position": "Team Member",
+  "transcript": "For example, a year and half ago, I decided to change my profession to data analytics. when I am moving to a new country. I chose a profession that is more in demand for this country. It was not difficult for me to retrain for a new specialty because I was comprehensively developed before that. I combined self-education and education-specialized courses. A new profession opens up new opportunity for me to realize in a new country.",
+  "assessment": {
+    "candidate_id": "Dima_Dima_Question_5_learn",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate level of creativity and exploratory language"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 80,
+        "reason": "high level of organization and planning"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "moderate speech rate and medium energy level"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 70,
+        "reason": "cooperative and positive tone"
+      },
+      "neuroticism": {
+        "score": 20,
+        "confidence": 60,
+        "reason": "stable pitch and low frequency of pauses"
+      }
+    },
+    "motivation": {
+      "overall_level": "Medium",
+      "pattern": "consistent across their answer",
+      "voice_indicators": [
+        "moderate energy level",
+        "few filler words",
+        "stable pitch variance"
+      ],
+      "content_indicators": [
+        "proactive and motivated individual",
+        "strong work ethic",
+        "future-oriented and driven mindset"
+      ]
+    },
+    "trait_strengths": [
+      "high conscientiousness and organization skills",
+      "moderate openness and creativity",
+      "low neuroticism and calm tone"
+    ],
+    "motivation_strengths": [
+      "medium motivation level and consistent tone",
+      "proactive and driven mindset",
+      "motivated to learn and develop skills"
+    ],
+    "personality_development_areas": [
+      "lack of enthusiasm or passion",
+      "building stronger relationships with colleagues"
+    ],
+    "motivation_development_areas": [
+      "increasing engagement and enthusiasm",
+      "varying tone to convey more emotion and emphasis"
+    ],
+    "hr_summary": "The candidate shows a strong fit for a data analytics role, with high conscientiousness and organization skills, moderate openness and creativity, and low neuroticism. Their motivation level is medium, with a consistent tone and a proactive mindset. However, they may need to work on increasing their enthusiasm and varying their tone to convey more emotion and emphasis."
+  }
+}

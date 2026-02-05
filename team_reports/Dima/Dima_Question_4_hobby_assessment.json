@@ -1,0 +1,68 @@
+{
+  "candidate_id": "Dima_Dima_Question_4_hobby",
+  "position": "Team Member",
+  "transcript": "About hobbies. I have a hobby. It's football and running. I like to exercise in order to improve my health. Running allows me to have fun as well as spend time with friends doing sport together. I like to study everything related to running, new equipment, scientific articles, various competitions. Running allows me, also start doing new sports such as triathlon or cycling.",
+  "assessment": {
+    "candidate_id": "Dima_Dima_Question_4_hobby",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate level of creativity and exploratory language"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 85,
+        "reason": "well-structured speech and organized discussion of hobbies"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "moderate speech rate and low-pitched voice"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 75,
+        "reason": "cooperative and somewhat warm demeanor"
+      },
+      "neuroticism": {
+        "score": 30,
+        "confidence": 65,
+        "reason": "stability and low levels of anxiety or fear"
+      }
+    },
+    "motivation": {
+      "overall_level": "Medium",
+      "pattern": "consistent with some fluctuation in energy levels",
+      "voice_indicators": [
+        "moderate energy level",
+        "low-pitched voice",
+        "speaking rate of 100.8 wpm",
+        "presence of pauses"
+      ],
+      "content_indicators": [
+        "interest in hobbies",
+        "proactive approach to health and sports",
+        "desire to start new sports"
+      ]
+    },
+    "trait_strengths": [
+      "Conscientiousness",
+      "Openness",
+      "Motivation"
+    ],
+    "motivation_strengths": [
+      "Engagement signals",
+      "Determined tone",
+      "Proactive suggestions"
+    ],
+    "personality_development_areas": [
+      "expressing enthusiasm or emotions more openly"
+    ],
+    "motivation_development_areas": [
+      "sustaining engagement and motivation in less interesting tasks"
+    ],
+    "hr_summary": "The candidate is a conscientious and moderately open individual with a medium level of motivation. They are suited for roles that value organization and a proactive approach to personal development. The candidate is a good fit for roles that align with their interests and values, where their motivation and conscientiousness can be fully leveraged."
+  }
+}

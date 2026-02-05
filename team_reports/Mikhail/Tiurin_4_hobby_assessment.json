@@ -1,0 +1,69 @@
+{
+  "candidate_id": "Mikhail_Tiurin_4_hobby",
+  "position": "Team Member",
+  "transcript": "um what about my hobby what's for a hobby i would say that i'm passionate about computer games or console games and it is very interesting for me and i don't spend a lot of time playing computer games but i'll say that it is one of the most interesting hobbies which i ever did and And it's really interesting to open some new stuff or some new tricks, mechanics inside the game. And you can enjoy AAA projects and whatever you want, I mean. So yeah, it's very cool. And I think that it means a lot to me because it's like a break for my brain. or sometimes sometimes it's a hard a bit but yeah i would say that computer games is the most interesting thing uh not i mean inside your house if we are talking about the outside i would say sport or something like other stuff but yeah for now it's computer games for sure",
+  "assessment": {
+    "candidate_id": "Mikhail_Tiurin_4_hobby",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate vocabulary and exploratory language"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 80,
+        "reason": "steady pace and structured speech"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "moderate speech rate and medium energy level"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 65,
+        "reason": "warm and cooperative tone"
+      },
+      "neuroticism": {
+        "score": 20,
+        "confidence": 70,
+        "reason": "stable pitch and low number of pauses"
+      }
+    },
+    "motivation": {
+      "overall_level": "Medium",
+      "pattern": "consistent across their answer",
+      "voice_indicators": [
+        "moderate speech rate",
+        "medium energy level",
+        "stable pitch"
+      ],
+      "content_indicators": [
+        "enthusiasm for computer games",
+        "desire to explore new aspects",
+        "proactive language"
+      ]
+    },
+    "trait_strengths": [
+      "Conscientiousness",
+      "Openness",
+      "Agreeableness"
+    ],
+    "motivation_strengths": [
+      "High engagement signals",
+      "Persistent, determined tone",
+      "Proactive language"
+    ],
+    "personality_development_areas": [
+      "assertiveness",
+      "creative expression"
+    ],
+    "motivation_development_areas": [
+      "sustained engagement",
+      "maintaining enthusiasm"
+    ],
+    "hr_summary": "The candidate demonstrates a good balance of conscientiousness, openness, and agreeableness, making them a suitable fit for a team-oriented role. Their motivation level is medium, with a consistent pattern of engagement and enthusiasm for their hobby. However, they may need to work on maintaining their energy and interest over time, as well as developing their assertiveness and creative expression."
+  }
+}

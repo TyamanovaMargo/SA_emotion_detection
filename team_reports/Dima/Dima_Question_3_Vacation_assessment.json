@@ -1,0 +1,67 @@
+{
+  "candidate_id": "Dima_Dima_Question_3_Vacation",
+  "position": "Team Member",
+  "transcript": "When I'm planning a trip, I always choose based on efficiency, that means value for money, and my dream of visiting a place. I love the process of planning and selecting all the elements of the trip. Also, I study every hotel and every landmark very deeply to find the most suitable option for me and my family.",
+  "assessment": {
+    "candidate_id": "Dima_Dima_Question_3_Vacation",
+    "position": "Team Member",
+    "big_five": {
+      "openness": {
+        "score": 60,
+        "confidence": 70,
+        "reason": "moderate level of creativity and exploratory language"
+      },
+      "conscientiousness": {
+        "score": 80,
+        "confidence": 80,
+        "reason": "high level of organization and planning"
+      },
+      "extraversion": {
+        "score": 50,
+        "confidence": 60,
+        "reason": "balanced level of extraversion"
+      },
+      "agreeableness": {
+        "score": 70,
+        "confidence": 70,
+        "reason": "cooperative tone and consideration of others' needs"
+      },
+      "neuroticism": {
+        "score": 30,
+        "confidence": 60,
+        "reason": "stable pitch and low frequency of pauses"
+      }
+    },
+    "motivation": {
+      "overall_level": "Medium",
+      "pattern": "consistent level of engagement",
+      "voice_indicators": [
+        "moderate speech rate",
+        "medium energy level",
+        "stable pitch"
+      ],
+      "content_indicators": [
+        "detailed planning process",
+        "positive language",
+        "proactive approach"
+      ]
+    },
+    "trait_strengths": [
+      "strong planning and organizational skills",
+      "ability to work effectively with others",
+      "emotional stability and resilience"
+    ],
+    "motivation_strengths": [
+      "high level of dedication and commitment",
+      "strong sense of initiative and responsibility",
+      "positive and energetic attitude"
+    ],
+    "personality_development_areas": [
+      "developing more assertiveness and confidence in communication style"
+    ],
+    "motivation_development_areas": [
+      "developing more dynamic and engaging communication skills"
+    ],
+    "hr_summary": "The candidate demonstrates a strong fit for a role that requires planning, organization, and attention to detail. They show a proactive and determined approach to planning, but may benefit from developing more assertiveness and confidence in their communication style. Overall, the candidate is a strong contender for a role that values organization, planning, and teamwork, but may require some development to reach their full potential."
+  }
+}
