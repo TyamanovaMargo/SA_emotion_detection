@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  hr-assessment:
+  hr-assessment-gpu:
     build: .
-    container_name: hr-assessment-pipeline
+    container_name: hr-assessment-pipeline-gpu
     volumes:
       # Mount your audio data (add more volumes as needed)
       - ./audio:/app/audio:ro
@@ -15,13 +15,14 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"  # Support various GPU architectures
+      - WHISPER_DEVICE=cuda
+      - EMOTION_DEVICE=cuda
+      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
     # Allocate more memory for heavy models
-    mem_limit: 8g
-    shm_size: 2g
+    mem_limit: 16g
+    shm_size: 4g
     # Use all available CPUs
-    cpus: "4.0"
+    cpus: "8.0"
     # GPU support
     deploy:
       resources:
@@ -36,10 +37,10 @@ services:
     # Override default command
     command: tail -f /dev/null
 
-  # Optional: API service
-  hr-assessment-api:
+  # Optional: API service with GPU
+  hr-assessment-api-gpu:
     build: .
-    container_name: hr-assessment-api
+    container_name: hr-assessment-api-gpu
     ports:
       - "8000:8000"
     volumes:
@@ -47,10 +48,11 @@ services:
       - ./.env:/app/.env:ro
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_DEVICE=cuda
+      - EMOTION_DEVICE=cuda
       - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
-    mem_limit: 8g
-    shm_size: 2g
+    mem_limit: 16g
+    shm_size: 4g
     # GPU support
     deploy:
       resources:
