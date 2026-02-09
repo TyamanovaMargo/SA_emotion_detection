@@ -2,256 +2,288 @@
 """
 HR Personality & Motivation Assessment Pipeline
 
-Main entry point for processing audio files and generating HR assessments.
-Supports both single files and folders of audio files.
+Universal audio processor: takes any audio file(s) as input,
+extracts voice features, and generates Big Five + motivation reports.
+
+Supports:
+  - Single audio file
+  - Folder of audio files (recursive)
+  - Optional transcript file (txt/json) paired with audio
+  - Batch processing with summary table
+  - JSON + HTML report output
 """
 
 import argparse
-from pathlib import Path
+import json
 import sys
-from typing import List
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
+import librosa
+import numpy as np
 from rich.console import Console
 from rich.table import Table
 
 from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
+from src.models.schemas import HRAssessmentResult, VoiceFeatures
 from src.utils.reporting import generate_html_report
-from src.models.schemas import HRAssessmentResult
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
+TRANSCRIPT_EXTENSIONS = {".txt", ".json"}
 console = Console()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="HR Personality & Motivation Assessment from Voice",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process a single audio file
-  python main.py audio/interview.wav
-  
-  # Process all audio files in a folder
-  python main.py audio/candidates/
-  
-  # Process folder with position info
-  python main.py audio/candidates/ --position "Software Engineer"
-  
-  # Generate HTML reports for all files
-  python main.py audio/candidates/ --html-report
-  
-  # Use a specific Whisper model
-  python main.py audio/interview.wav --whisper-model medium
-        """
-    )
-    
-    parser.add_argument(
-        "input_path",
-        type=Path,
-        help="Path to audio file or folder containing audio files"
-    )
-    
-    parser.add_argument(
-        "--candidate-id", "-c",
-        type=str,
-        default=None,
-        help="Candidate identifier"
-    )
-    
-    parser.add_argument(
-        "--position", "-p",
-        type=str,
-        default=None,
-        help="Position being applied for"
-    )
-    
-    parser.add_argument(
-        "--output-dir", "-o",
-        type=Path,
-        default=Path("./outputs"),
-        help="Output directory for results (default: ./outputs)"
-    )
-    
-    parser.add_argument(
-        "--whisper-model",
-        type=str,
-        default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper model size (default: base)"
-    )
-    
-    parser.add_argument(
-        "--html-report",
-        action="store_true",
-        help="Generate HTML report"
-    )
-    
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Don't save JSON output"
-    )
-    
-    parser.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress detailed output"
-    )
-    
-    parser.add_argument(
-        "--limit", "-l",
-        type=int,
-        default=None,
-        help="Maximum number of audio files to process (useful for testing)"
-    )
-    
-    parser.add_argument(
-        "--recursive", "-r",
-        action="store_true",
-        default=True,
-        help="Search for audio files recursively in subfolders (default: True)"
-    )
-    
-    args = parser.parse_args()
-    
-    if not args.input_path.exists():
-        print(f"Error: Path not found: {args.input_path}")
-        sys.exit(1)
-    
-    config = load_config()
-    config.output_dir = args.output_dir
-    config.whisper.model_name = args.whisper_model
-    
-    pipeline = HRAssessmentPipeline(config)
-    
-    # Determine if input is file or folder
-    if args.input_path.is_dir():
-        return process_folder(pipeline, args)
-    else:
-        return process_single_file(pipeline, args)
-
+# ---------------------------------------------------------------------------
+# Audio & transcript discovery
+# ---------------------------------------------------------------------------
 
 def find_audio_files(folder: Path, recursive: bool = True) -> List[Path]:
     """Find all audio files in a folder."""
     audio_files = []
     pattern = "**/*" if recursive else "*"
-    
     for ext in AUDIO_EXTENSIONS:
         audio_files.extend(folder.glob(f"{pattern}{ext}"))
         audio_files.extend(folder.glob(f"{pattern}{ext.upper()}"))
-    
-    return sorted(audio_files)
+    return sorted(set(audio_files))
 
 
-def process_single_file(pipeline: HRAssessmentPipeline, args) -> int:
-    """Process a single audio file."""
-    try:
-        result = pipeline.process(
-            audio_path=args.input_path,
-            candidate_id=args.candidate_id,
-            position=args.position,
-            save_output=not args.no_save,
-        )
-        
-        if not args.quiet:
-            pipeline.print_summary(result)
-        
-        if args.html_report:
-            html_path = args.output_dir / f"{args.input_path.stem}_report.html"
-            generate_html_report(result, output_path=html_path)
-            console.print(f"[green]HTML report saved to:[/green] {html_path}")
-        
-        return 0
-        
-    except Exception as e:
-        print(f"Error processing audio: {e}")
-        if not args.quiet:
-            import traceback
-            traceback.print_exc()
-        return 1
+def find_transcript_for_audio(audio_path: Path) -> Optional[Path]:
+    """
+    Try to find a matching transcript file for an audio file.
+
+    Search order:
+      1. Same directory, same stem, .txt or .json
+      2. Sibling 'transcripts/' or 'Transcription/' folder, same stem
+      3. Fuzzy match (case-insensitive, ignore spaces/underscores)
+    """
+    stem = audio_path.stem
+    parent = audio_path.parent
+
+    # 1. Same directory — exact stem match
+    for ext in TRANSCRIPT_EXTENSIONS:
+        candidate = parent / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+
+    # 2. Sibling transcript folders
+    for folder_name in ("transcripts", "Transcripts", "Transcription", "transcription", "text", "Text"):
+        trans_dir = parent / folder_name
+        if not trans_dir.is_dir():
+            # Also check one level up
+            trans_dir = parent.parent / folder_name
+        if trans_dir.is_dir():
+            for ext in TRANSCRIPT_EXTENSIONS:
+                candidate = trans_dir / f"{stem}{ext}"
+                if candidate.exists():
+                    return candidate
+
+    # 3. Fuzzy match in same directory + sibling folders
+    norm = lambda s: s.lower().replace("_", "").replace(" ", "").replace("-", "")
+    audio_norm = norm(stem)
+
+    search_dirs = [parent]
+    for folder_name in ("transcripts", "Transcripts", "Transcription", "transcription"):
+        for base in (parent, parent.parent):
+            d = base / folder_name
+            if d.is_dir():
+                search_dirs.append(d)
+
+    for d in search_dirs:
+        for ext in TRANSCRIPT_EXTENSIONS:
+            for f in d.glob(f"*{ext}"):
+                if norm(f.stem) == audio_norm:
+                    return f
+
+    return None
 
 
-def process_folder(pipeline: HRAssessmentPipeline, args) -> int:
-    """Process all audio files in a folder."""
-    audio_files = find_audio_files(args.input_path, recursive=args.recursive)
-    
-    # Apply limit if specified
-    if args.limit and args.limit > 0:
-        console.print(f"[yellow]Limiting to first {args.limit} files[/yellow]")
-        audio_files = audio_files[:args.limit]
-    
-    if not audio_files:
-        console.print(f"[red]No audio files found in:[/red] {args.input_path}")
-        console.print(f"Supported formats: {', '.join(AUDIO_EXTENSIONS)}")
-        return 1
-    
-    console.print(f"\n[bold blue]Found {len(audio_files)} audio files to process[/bold blue]")
-    
-    results: List[tuple[Path, HRAssessmentResult]] = []
-    errors: List[tuple[Path, str]] = []
-    
-    for i, audio_path in enumerate(audio_files, 1):
-        console.print(f"\n[bold]({i}/{len(audio_files)})[/bold] Processing: {audio_path.name}")
-        
-        # Use filename as candidate_id if not provided
-        candidate_id = args.candidate_id or audio_path.stem
-        
+def load_transcript(path: Path) -> str:
+    """Load transcript text from .txt or .json file."""
+    text = path.read_text(encoding="utf-8").strip()
+
+    if path.suffix == ".json":
         try:
-            result = pipeline.process(
-                audio_path=audio_path,
-                candidate_id=candidate_id,
-                position=args.position,
-                save_output=not args.no_save,
+            data = json.loads(text)
+            if isinstance(data, dict):
+                # Support {"text": "..."} or {"transcript": "..."}
+                for key in ("text", "transcript", "content"):
+                    if key in data:
+                        return str(data[key])
+            if isinstance(data, str):
+                return data
+        except json.JSONDecodeError:
+            pass  # treat as plain text
+
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Processing helpers
+# ---------------------------------------------------------------------------
+
+def process_single(
+    pipeline: HRAssessmentPipeline,
+    audio_path: Path,
+    transcript_path: Optional[Path],
+    candidate_id: Optional[str],
+    position: Optional[str],
+    output_dir: Path,
+    html_report: bool = False,
+    save: bool = True,
+    quiet: bool = False,
+) -> HRAssessmentResult:
+    """
+    Process one audio file through the full pipeline.
+
+    If a transcript is provided, it is used directly and Whisper transcription
+    is skipped. Voice features are still extracted from the audio.
+    """
+    if transcript_path and transcript_path.exists():
+        transcript = load_transcript(transcript_path)
+        console.print(f"  [dim]Transcript:[/dim] {transcript_path.name}")
+
+        # Extract voice features from audio
+        audio, sr = librosa.load(audio_path, sr=16000, mono=True)
+        duration = len(audio) / sr
+
+        prosody = pipeline.prosody_extractor.extract(
+            audio, sr, len(transcript.split()), duration
+        )
+        emotions = pipeline.emotion_detector.detect(audio, sr, duration)
+        egemaps = pipeline.egemaps_extractor.extract(audio, sr)
+        embedding_summary = pipeline._generate_embedding_summary(
+            prosody, emotions, egemaps
+        )
+
+        voice_features = VoiceFeatures(
+            emotions=emotions,
+            prosody=prosody,
+            acoustic_features=egemaps,
+            wavlm_embedding_summary=embedding_summary,
+        )
+
+        result = pipeline.process_transcript_only(
+            transcript=transcript,
+            voice_features=voice_features,
+            candidate_id=candidate_id,
+            position=position,
+        )
+    else:
+        # Full pipeline: transcribe + extract + assess
+        result = pipeline.process(
+            audio_path=audio_path,
+            candidate_id=candidate_id,
+            position=position,
+            save_output=False,  # we handle saving ourselves
+        )
+        transcript = ""
+
+    # Save JSON report
+    if save:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = output_dir / f"{audio_path.stem}_{timestamp}_assessment.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "metadata": {
+                        "audio_file": str(audio_path),
+                        "transcript_file": str(transcript_path) if transcript_path else None,
+                        "candidate_id": result.candidate_id,
+                        "position": result.position,
+                        "timestamp": timestamp,
+                    },
+                    "transcript": transcript or None,
+                    "assessment": result.model_dump(exclude={"raw_response"}),
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
             )
-            results.append((audio_path, result))
-            
-            if args.html_report:
-                html_path = args.output_dir / f"{audio_path.stem}_report.html"
-                generate_html_report(result, output_path=html_path)
-            
-        except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
-            errors.append((audio_path, str(e)))
-    
-    # Print summary table
-    if not args.quiet and results:
-        print_batch_summary(results)
-    
-    # Print errors if any
-    if errors:
-        console.print(f"\n[red]Failed to process {len(errors)} file(s):[/red]")
-        for path, error in errors:
-            console.print(f"  • {path.name}: {error}")
-    
-    console.print(f"\n[bold green]Completed:[/bold green] {len(results)}/{len(audio_files)} files processed")
-    console.print(f"[bold]Output directory:[/bold] {args.output_dir}")
-    
-    return 0 if not errors else 1
+        if not quiet:
+            console.print(f"  [green]JSON saved:[/green] {json_path}")
+
+    # HTML report
+    if html_report:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        html_path = output_dir / f"{audio_path.stem}_report.html"
+        generate_html_report(result, output_path=html_path, transcript=transcript or None)
+        if not quiet:
+            console.print(f"  [green]HTML saved:[/green] {html_path}")
+
+    return result
 
 
-def print_batch_summary(results: List[tuple[Path, HRAssessmentResult]]):
-    """Print a summary table of all processed candidates."""
+def generate_summary(
+    results: Dict[str, List[HRAssessmentResult]],
+    output_dir: Path,
+):
+    """Generate aggregate summary JSON when multiple files are grouped by person/folder."""
+    for group_name, group_results in results.items():
+        if not group_results:
+            continue
+
+        avg_scores = {}
+        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
+            avg_scores[trait] = round(
+                sum(getattr(r.big_five, trait).score for r in group_results) / len(group_results), 1
+            )
+
+        motivation_counts: Dict[str, int] = {}
+        for r in group_results:
+            level = r.motivation.overall_level
+            motivation_counts[level] = motivation_counts.get(level, 0) + 1
+
+        all_strengths = []
+        for r in group_results:
+            all_strengths.extend(r.trait_strengths)
+
+        summary = {
+            "group": group_name,
+            "recordings_analyzed": len(group_results),
+            "average_big_five": avg_scores,
+            "dominant_motivation": max(motivation_counts, key=motivation_counts.get),
+            "motivation_distribution": motivation_counts,
+            "common_strengths": list(set(all_strengths))[:5],
+        }
+
+        group_dir = output_dir / group_name
+        group_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = group_dir / "SUMMARY.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+
+        console.print(f"[bold green]Summary saved:[/bold green] {summary_path}")
+
+
+# ---------------------------------------------------------------------------
+# Batch summary table
+# ---------------------------------------------------------------------------
+
+def print_batch_summary(results: List[Tuple[Path, HRAssessmentResult]]):
+    """Print a summary table of all processed files."""
     console.print("\n")
-    
-    table = Table(title="Batch Assessment Summary", show_header=True, header_style="bold cyan")
-    table.add_column("Candidate", style="bold")
+
+    table = Table(title="Assessment Summary", show_header=True, header_style="bold cyan")
+    table.add_column("File / ID", style="bold")
     table.add_column("Motivation", justify="center")
-    table.add_column("O", justify="center")  # Openness
-    table.add_column("C", justify="center")  # Conscientiousness
-    table.add_column("E", justify="center")  # Extraversion
-    table.add_column("A", justify="center")  # Agreeableness
-    table.add_column("N", justify="center")  # Neuroticism
+    table.add_column("O", justify="center")
+    table.add_column("C", justify="center")
+    table.add_column("E", justify="center")
+    table.add_column("A", justify="center")
+    table.add_column("N", justify="center")
     table.add_column("Top Strength")
-    
+
     for path, result in results:
         motivation_color = {
             "High": "green",
             "Medium": "yellow",
-            "Low": "red"
+            "Low": "red",
         }.get(result.motivation.overall_level, "white")
-        
+
         table.add_row(
             result.candidate_id or path.stem,
             f"[{motivation_color}]{result.motivation.overall_level}[/{motivation_color}]",
@@ -262,10 +294,230 @@ def print_batch_summary(results: List[tuple[Path, HRAssessmentResult]]):
             str(result.big_five.neuroticism.score),
             result.trait_strengths[0] if result.trait_strengths else "-",
         )
-    
+
     console.print(table)
-    console.print("\n[dim]O=Openness, C=Conscientiousness, E=Extraversion, A=Agreeableness, N=Neuroticism[/dim]")
+    console.print("[dim]O=Openness  C=Conscientiousness  E=Extraversion  A=Agreeableness  N=Neuroticism[/dim]\n")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="HR Personality & Motivation Assessment from Voice",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Single audio file
+  python main.py interview.wav
+
+  # Single audio + existing transcript
+  python main.py interview.wav --transcript interview.txt
+
+  # Folder of audio files (recursive)
+  python main.py recordings/
+
+  # Limit number of files
+  python main.py recordings/ --limit 5
+
+  # Group results by subfolder name (e.g. per person)
+  python main.py recordings/ --group-by-folder
+
+  # Custom output directory + HTML reports
+  python main.py recordings/ -o reports/ --html-report
+
+  # Specify candidate info
+  python main.py interview.wav -c "John Doe" -p "Software Engineer"
+        """,
+    )
+
+    parser.add_argument(
+        "input_path",
+        type=Path,
+        help="Path to an audio file or a folder containing audio files",
+    )
+    parser.add_argument(
+        "--transcript", "-t",
+        type=Path,
+        default=None,
+        help="Path to transcript file (.txt or .json) for single-file mode",
+    )
+    parser.add_argument(
+        "--candidate-id", "-c",
+        type=str,
+        default=None,
+        help="Candidate identifier",
+    )
+    parser.add_argument(
+        "--position", "-p",
+        type=str,
+        default=None,
+        help="Position / role for assessment context",
+    )
+    parser.add_argument(
+        "--output-dir", "-o",
+        type=Path,
+        default=Path("./outputs"),
+        help="Output directory (default: ./outputs)",
+    )
+    parser.add_argument(
+        "--whisper-model",
+        type=str,
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large"],
+        help="Whisper model size (default: base)",
+    )
+    parser.add_argument(
+        "--html-report",
+        action="store_true",
+        help="Generate HTML report for each file",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Don't save JSON output files",
+    )
+    parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress detailed output",
+    )
+    parser.add_argument(
+        "--limit", "-l",
+        type=int,
+        default=None,
+        help="Max number of audio files to process",
+    )
+    parser.add_argument(
+        "--group-by-folder",
+        action="store_true",
+        help="Group results by immediate parent folder (useful for per-person analysis)",
+    )
+    parser.add_argument(
+        "--auto-transcript",
+        action="store_true",
+        default=True,
+        help="Auto-detect transcript files next to audio files (default: True)",
+    )
+
+    args = parser.parse_args()
+
+    if not args.input_path.exists():
+        console.print(f"[red]Error:[/red] Path not found: {args.input_path}")
+        sys.exit(1)
+
+    # Build pipeline config
+    config = load_config()
+    config.output_dir = args.output_dir
+    config.whisper.model_name = args.whisper_model
+    pipeline = HRAssessmentPipeline(config)
+
+    # --- Single file mode ---
+    if args.input_path.is_file():
+        if args.input_path.suffix.lower() not in AUDIO_EXTENSIONS:
+            console.print(f"[red]Error:[/red] Not a supported audio format: {args.input_path.suffix}")
+            console.print(f"Supported: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+            sys.exit(1)
+
+        transcript_path = args.transcript
+        if transcript_path is None and args.auto_transcript:
+            transcript_path = find_transcript_for_audio(args.input_path)
+
+        console.print(f"\n[bold blue]Processing:[/bold blue] {args.input_path.name}")
+        try:
+            result = process_single(
+                pipeline=pipeline,
+                audio_path=args.input_path,
+                transcript_path=transcript_path,
+                candidate_id=args.candidate_id or args.input_path.stem,
+                position=args.position,
+                output_dir=args.output_dir,
+                html_report=args.html_report,
+                save=not args.no_save,
+                quiet=args.quiet,
+            )
+            if not args.quiet:
+                pipeline.print_summary(result)
+            sys.exit(0)
+
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            if not args.quiet:
+                import traceback
+                traceback.print_exc()
+            sys.exit(1)
+
+    # --- Folder mode ---
+    audio_files = find_audio_files(args.input_path, recursive=True)
+
+    if args.limit and args.limit > 0:
+        console.print(f"[yellow]Limiting to first {args.limit} files[/yellow]")
+        audio_files = audio_files[: args.limit]
+
+    if not audio_files:
+        console.print(f"[red]No audio files found in:[/red] {args.input_path}")
+        console.print(f"Supported: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+        sys.exit(1)
+
+    console.print(f"\n[bold blue]Found {len(audio_files)} audio file(s)[/bold blue]")
+
+    all_results: List[Tuple[Path, HRAssessmentResult]] = []
+    grouped_results: Dict[str, List[HRAssessmentResult]] = {}
+    errors: List[Tuple[Path, str]] = []
+
+    for i, audio_path in enumerate(audio_files, 1):
+        console.print(f"\n[bold]({i}/{len(audio_files)})[/bold] {audio_path.name}")
+
+        transcript_path = None
+        if args.auto_transcript:
+            transcript_path = find_transcript_for_audio(audio_path)
+
+        candidate_id = args.candidate_id or audio_path.stem
+
+        try:
+            result = process_single(
+                pipeline=pipeline,
+                audio_path=audio_path,
+                transcript_path=transcript_path,
+                candidate_id=candidate_id,
+                position=args.position,
+                output_dir=args.output_dir,
+                html_report=args.html_report,
+                save=not args.no_save,
+                quiet=args.quiet,
+            )
+            all_results.append((audio_path, result))
+
+            if args.group_by_folder:
+                group = audio_path.parent.name
+                grouped_results.setdefault(group, []).append(result)
+
+        except Exception as e:
+            console.print(f"  [red]Error:[/red] {e}")
+            errors.append((audio_path, str(e)))
+
+    # Print batch summary table
+    if not args.quiet and all_results:
+        print_batch_summary(all_results)
+
+    # Generate per-group summaries
+    if args.group_by_folder and grouped_results:
+        generate_summary(grouped_results, args.output_dir)
+
+    # Print errors
+    if errors:
+        console.print(f"\n[red]Failed: {len(errors)} file(s)[/red]")
+        for path, error in errors:
+            console.print(f"  - {path.name}: {error}")
+
+    console.print(
+        f"\n[bold green]Done:[/bold green] {len(all_results)}/{len(audio_files)} processed"
+    )
+    console.print(f"[bold]Output:[/bold] {args.output_dir}")
+
+    sys.exit(0 if not errors else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

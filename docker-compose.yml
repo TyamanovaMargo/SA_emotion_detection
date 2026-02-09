@@ -5,12 +5,10 @@ services:
     build: .
     container_name: hr-assessment-pipeline
     volumes:
-      # Mount audio data
+      # Mount your audio data (add more volumes as needed)
       - ./audio:/app/audio:ro
-      - ./Team Recordings:/app/Team Recordings:ro
-      # Mount output directories
+      # Mount output directory
       - ./outputs:/app/outputs
-      - ./team_reports:/app/team_reports
       # Mount .env file
       - ./.env:/app/.env:ro
     environment:
