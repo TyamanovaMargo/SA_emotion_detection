@@ -20,14 +20,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import librosa
-import numpy as np
 from rich.console import Console
 from rich.table import Table
 
 from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
-from src.models.schemas import HRAssessmentResult, VoiceFeatures
+from src.models.schemas import HRAssessmentResult
 from src.utils.reporting import generate_html_report
 
 
@@ -134,52 +132,29 @@ def process_single(
     html_report: bool = False,
     save: bool = True,
     quiet: bool = False,
+    skip_transcription: bool = False,
 ) -> HRAssessmentResult:
     """
     Process one audio file through the full pipeline.
 
-    If a transcript is provided, it is used directly and Whisper transcription
-    is skipped. Voice features are still extracted from the audio.
+    If a transcript is provided, it is passed to the pipeline directly.
+    If skip_transcription is True and no transcript exists, the pipeline
+    runs in voice-only mode (no Whisper).
     """
+    transcript_text = None
     if transcript_path and transcript_path.exists():
-        transcript = load_transcript(transcript_path)
+        transcript_text = load_transcript(transcript_path)
         console.print(f"  [dim]Transcript:[/dim] {transcript_path.name}")
 
-        # Extract voice features from audio
-        audio, sr = librosa.load(audio_path, sr=16000, mono=True)
-        duration = len(audio) / sr
-
-        prosody = pipeline.prosody_extractor.extract(
-            audio, sr, len(transcript.split()), duration
-        )
-        emotions = pipeline.emotion_detector.detect(audio, sr, duration)
-        egemaps = pipeline.egemaps_extractor.extract(audio, sr)
-        embedding_summary = pipeline._generate_embedding_summary(
-            prosody, emotions, egemaps
-        )
-
-        voice_features = VoiceFeatures(
-            emotions=emotions,
-            prosody=prosody,
-            acoustic_features=egemaps,
-            wavlm_embedding_summary=embedding_summary,
-        )
-
-        result = pipeline.process_transcript_only(
-            transcript=transcript,
-            voice_features=voice_features,
-            candidate_id=candidate_id,
-            position=position,
-        )
-    else:
-        # Full pipeline: transcribe + extract + assess
-        result = pipeline.process(
-            audio_path=audio_path,
-            candidate_id=candidate_id,
-            position=position,
-            save_output=False,  # we handle saving ourselves
-        )
-        transcript = ""
+    result = pipeline.process(
+        audio_path=audio_path,
+        candidate_id=candidate_id,
+        position=position,
+        save_output=False,  # we handle saving ourselves
+        skip_transcription=skip_transcription and transcript_text is None,
+        transcript_text=transcript_text,
+    )
+    transcript = transcript_text or ""
 
     # Save JSON report
     if save:
@@ -197,7 +172,8 @@ def process_single(
                         "timestamp": timestamp,
                     },
                     "transcript": transcript or None,
-                    "assessment": result.model_dump(exclude={"raw_response"}),
+                    "voice_features": result.model_dump(include={"voice_features"}).get("voice_features") if result.voice_features else None,
+                    "assessment": result.model_dump(exclude={"raw_response", "voice_features"}),
                 },
                 f,
                 indent=2,
@@ -400,6 +376,11 @@ Examples:
         default=True,
         help="Auto-detect transcript files next to audio files (default: True)",
     )
+    parser.add_argument(
+        "--skip-transcription",
+        action="store_true",
+        help="Skip Whisper transcription — use voice features only (faster, no transcript needed)",
+    )
 
     args = parser.parse_args()
 
@@ -436,6 +417,7 @@ Examples:
                 html_report=args.html_report,
                 save=not args.no_save,
                 quiet=args.quiet,
+                skip_transcription=args.skip_transcription,
             )
             if not args.quiet:
                 pipeline.print_summary(result)
@@ -486,6 +468,7 @@ Examples:
                 html_report=args.html_report,
                 save=not args.no_save,
                 quiet=args.quiet,
+                skip_transcription=args.skip_transcription,
             )
             all_results.append((audio_path, result))
 
