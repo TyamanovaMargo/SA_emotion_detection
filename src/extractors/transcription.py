@@ -1,12 +1,13 @@
 """Speech-to-text transcription using Whisper."""
 
-import re
-from typing import Optional, List, Dict, Any
-import whisper
+from typing import Optional, Dict, List
 import numpy as np
+import whisper
+import torch
 
 from ..config import WhisperConfig
 from ..models.schemas import TranscriptionResult
+from ..utils.device import get_optimal_device
 
 
 FILLER_WORDS = [
@@ -22,15 +23,27 @@ class WhisperTranscriber:
     def __init__(self, config: Optional[WhisperConfig] = None):
         self.config = config or WhisperConfig()
         self._model = None
+        
+        # Auto-detect device if set to "auto"
+        if self.config.device == "auto":
+            self.config.device = get_optimal_device()
     
     @property
     def model(self):
         """Lazy load the Whisper model."""
         if self._model is None:
+            print(f"Loading Whisper model on device: {self.config.device}")
+            
+            # Clear GPU cache before loading
+            if self.config.device == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             self._model = whisper.load_model(
                 self.config.model_name, 
                 device=self.config.device
             )
+            
+            print(f"Whisper model loaded successfully on {self.config.device}")
         return self._model
     
     def transcribe(

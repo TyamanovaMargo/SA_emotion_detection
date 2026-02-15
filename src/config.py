@@ -13,7 +13,10 @@ class WhisperConfig(BaseModel):
     """Whisper transcription configuration."""
     model_name: str = Field(default="base", description="Whisper model size")
     language: Optional[str] = Field(default=None, description="Language code or None for auto-detect")
-    device: str = Field(default="cpu", description="Device to run on (cpu/cuda)")
+    device: str = Field(
+        default_factory=lambda: os.getenv("WHISPER_DEVICE", "auto"),
+        description="Device to run on (cpu/cuda/mps/auto)"
+    )
 
 
 class EmotionConfig(BaseModel):
@@ -22,7 +25,14 @@ class EmotionConfig(BaseModel):
         default="iic/emotion2vec_plus_base",
         description="Emotion2vec model name"
     )
-    device: str = Field(default="cpu", description="Device to run on")
+    device: str = Field(
+        default_factory=lambda: os.getenv("EMOTION_DEVICE", "auto"),
+        description="Device to run on (cpu/cuda/mps/auto)"
+    )
+    batch_size: int = Field(
+        default_factory=lambda: int(os.getenv("EMOTION_BATCH_SIZE", "0")),
+        description="Batch size (0=auto based on device)"
+    )
 
 
 class ProsodyConfig(BaseModel):

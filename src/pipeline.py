@@ -84,6 +84,8 @@ class HRAssessmentPipeline:
         candidate_id: Optional[str] = None,
         position: Optional[str] = None,
         save_output: bool = True,
+        skip_transcription: bool = False,
+        transcript_text: Optional[str] = None,
     ) -> HRAssessmentResult:
         """
         Process an audio file through the complete pipeline.
@@ -93,6 +95,8 @@ class HRAssessmentPipeline:
             candidate_id: Optional candidate identifier
             position: Optional position being applied for
             save_output: Whether to save results to file
+            skip_transcription: Skip Whisper transcription (voice-only mode)
+            transcript_text: Pre-existing transcript text to use instead of Whisper
             
         Returns:
             HRAssessmentResult with complete analysis
@@ -113,8 +117,33 @@ class HRAssessmentPipeline:
             audio, sample_rate = self._load_audio(audio_path)
             duration = len(audio) / sample_rate
             
-            progress.update(task, description="Transcribing speech...")
-            transcription = self.transcriber.transcribe(audio, sample_rate, duration)
+            if transcript_text:
+                from .models.schemas import TranscriptionResult
+                transcription = TranscriptionResult(
+                    text=transcript_text,
+                    segments=[],
+                    language="unknown",
+                    word_count=len(transcript_text.split()),
+                    duration_seconds=duration,
+                    filler_words={},
+                    filler_word_rate=0.0,
+                )
+                console.print("  [dim]Using provided transcript[/dim]")
+            elif skip_transcription:
+                from .models.schemas import TranscriptionResult
+                transcription = TranscriptionResult(
+                    text="",
+                    segments=[],
+                    language="unknown",
+                    word_count=0,
+                    duration_seconds=duration,
+                    filler_words={},
+                    filler_word_rate=0.0,
+                )
+                console.print("  [dim]Skipping transcription (voice-only mode)[/dim]")
+            else:
+                progress.update(task, description="Transcribing speech...")
+                transcription = self.transcriber.transcribe(audio, sample_rate, duration)
             
             progress.update(task, description="Extracting prosody features...")
             prosody = self.prosody_extractor.extract(
@@ -123,6 +152,12 @@ class HRAssessmentPipeline:
             
             progress.update(task, description="Detecting emotions...")
             emotions = self.emotion_detector.detect(audio, sample_rate, duration)
+            
+            # Skip emotion timeline to reduce memory usage
+            # Uncomment if you have enough RAM (16GB+)
+            # progress.update(task, description="Building emotion timeline...")
+            # emotion_timeline = self.emotion_detector.detect_timeline(audio, sample_rate)
+            # emotions.emotion_timeline = emotion_timeline
             
             progress.update(task, description="Extracting acoustic features...")
             egemaps = self.egemaps_extractor.extract(audio, sample_rate)
@@ -139,7 +174,7 @@ class HRAssessmentPipeline:
                 wavlm_embedding_summary=embedding_summary,
             )
             
-            progress.update(task, description="Running HR assessment with Claude...")
+            progress.update(task, description="Running HR assessment with Groq LLM...")
             assessment_input = HRAssessmentInput(
                 transcript=transcription.text,
                 voice_features=voice_features,
@@ -190,26 +225,57 @@ class HRAssessmentPipeline:
         emotions,
         egemaps,
     ) -> str:
-        """Generate a summary of the voice embedding profile."""
+        """Generate a comprehensive voice profile summary."""
         parts = []
         
+        # Energy
         if prosody.energy_level == "high":
-            parts.append("energetic speaker")
+            parts.append(f"HIGH energy speaker (mean={prosody.energy_mean:.3f}, std={prosody.energy_std:.3f})")
         elif prosody.energy_level == "low":
-            parts.append("soft-spoken")
+            parts.append(f"LOW energy speaker (mean={prosody.energy_mean:.3f})")
         else:
-            parts.append("moderate energy")
+            parts.append(f"moderate energy (mean={prosody.energy_mean:.3f})")
         
-        if prosody.speaking_rate_wpm > 160:
-            parts.append("fast-paced")
-        elif prosody.speaking_rate_wpm < 100:
-            parts.append("deliberate pace")
+        if prosody.energy_std > 0.03:
+            parts.append("dynamic volume (large energy swings)")
+        elif prosody.energy_std < 0.01:
+            parts.append("flat volume (minimal variation)")
         
-        if prosody.pitch_variance > 1000:
-            parts.append("expressive intonation")
+        # Pace
+        wpm = prosody.speaking_rate_wpm
+        if wpm > 170:
+            parts.append(f"VERY fast speech ({wpm:.0f} wpm)")
+        elif wpm > 140:
+            parts.append(f"fast speech ({wpm:.0f} wpm)")
+        elif wpm < 90:
+            parts.append(f"VERY slow speech ({wpm:.0f} wpm)")
+        elif wpm < 110:
+            parts.append(f"slow speech ({wpm:.0f} wpm)")
+        else:
+            parts.append(f"moderate pace ({wpm:.0f} wpm)")
+        
+        # Pitch
+        if prosody.pitch_variance > 800:
+            parts.append("highly expressive intonation")
         elif prosody.pitch_variance < 200:
-            parts.append("monotone tendency")
+            parts.append("monotone/flat intonation")
+        else:
+            parts.append("moderate pitch variation")
         
+        if prosody.pitch_slope > 0.3:
+            parts.append("rising pitch trend (increasing engagement)")
+        elif prosody.pitch_slope < -0.3:
+            parts.append("falling pitch trend (declining energy)")
+        
+        # Fluency
+        if prosody.pauses_per_minute > 8:
+            parts.append(f"many pauses ({prosody.pauses_per_minute:.0f}/min)")
+        elif prosody.pauses_per_minute < 2:
+            parts.append("very few pauses (fluent)")
+        if prosody.long_pauses_count > 3:
+            parts.append(f"{prosody.long_pauses_count} long pauses (>1s)")
+        
+        # Emotion
         if emotions.primary_emotion in ["happy", "surprised"]:
             parts.append("positive emotional tone")
         elif emotions.primary_emotion in ["sad", "fearful"]:
@@ -273,6 +339,10 @@ class HRAssessmentPipeline:
         
         console.print(f"\n[bold yellow]Motivation Level:[/bold yellow] {result.motivation.overall_level}")
         console.print(f"  Pattern: {result.motivation.pattern}")
+        if result.motivation.voice_indicators:
+            console.print("  Voice indicators:")
+            for ind in result.motivation.voice_indicators[:5]:
+                console.print(f"    • {ind}")
         
         console.print("\n[bold green]Key Strengths:[/bold green]")
         for strength in result.trait_strengths[:3]:

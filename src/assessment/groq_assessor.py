@@ -70,28 +70,62 @@ class GroqHRAssessor:
     def _build_prompt(self, input_data: HRAssessmentInput) -> str:
         """Build the assessment prompt from input data."""
         voice = input_data.voice_features
-        
-        emotions_json = json.dumps(voice.emotions.model_dump(), indent=2)
-        
-        egemaps_summary = json.dumps({
-            "spectral": voice.acoustic_features.spectral_features,
-            "frequency": voice.acoustic_features.frequency_features,
-            "energy": voice.acoustic_features.energy_features,
-            "summary": voice.acoustic_features.summary
-        }, indent=2)
-        
+        prosody = voice.prosody
+
+        # Position context
+        if input_data.position:
+            position_context = (
+                f"TARGET POSITION: {input_data.position.upper()}\n"
+                f"Evaluate this candidate specifically for the {input_data.position} role."
+            )
+        else:
+            position_context = "General assessment without specific position context."
+
+        # Transcript section
+        if input_data.transcript:
+            transcript_section = f"TRANSCRIPT:\n{input_data.transcript}"
+        else:
+            transcript_section = "TRANSCRIPT: [Not available — voice-only assessment]"
+
+        # Build compact voice data JSON with ALL features
+        compact_data = {
+            "prosody": {
+                "speaking_rate_wpm": prosody.speaking_rate_wpm,
+                "articulation_rate": prosody.articulation_rate,
+                "pitch_mean_hz": prosody.pitch_mean_hz,
+                "pitch_range": prosody.pitch_range,
+                "pitch_variance": prosody.pitch_variance,
+                "pitch_slope": prosody.pitch_slope,
+                "energy_level": prosody.energy_level,
+                "energy_mean": prosody.energy_mean,
+                "energy_std": prosody.energy_std,
+                "energy_range": prosody.energy_range,
+                "pauses_per_minute": prosody.pauses_per_minute,
+                "pause_duration_mean": prosody.pause_duration_mean,
+                "pause_duration_std": prosody.pause_duration_std,
+                "long_pauses_count": prosody.long_pauses_count,
+                "speech_to_silence_ratio": prosody.speech_to_silence_ratio,
+                "rhythm_regularity": prosody.rhythm_regularity,
+            },
+            "emotion": {
+                "primary_emotion": voice.emotions.primary_emotion,
+                "confidence": voice.emotions.confidence,
+                "emotion_scores": voice.emotions.emotion_scores,
+            },
+            "voice_quality": voice.acoustic_features.voice_quality,
+            "acoustic_summary": voice.acoustic_features.summary,
+            "embedding_profile": voice.wavlm_embedding_summary,
+        }
+
+        compact_data_json = json.dumps(compact_data, indent=2)
+
         prompt = HR_ASSESSMENT_PROMPT.format(
-            transcript=input_data.transcript,
-            emotions_json=emotions_json,
-            speaking_rate=voice.prosody.speaking_rate_wpm,
-            pitch_mean=voice.prosody.pitch_mean_hz,
-            pitch_var=voice.prosody.pitch_variance,
-            energy=voice.prosody.energy_level,
-            pauses=voice.prosody.pauses_per_minute,
-            egemaps_summary=egemaps_summary,
-            embedding_profile=voice.wavlm_embedding_summary
+            position_context=position_context,
+            voice_profile=voice.wavlm_embedding_summary,
+            compact_data_json=compact_data_json,
+            transcript_section=transcript_section,
         )
-        
+
         return prompt
     
     def _get_structured_output(self, analysis_response: str) -> str:

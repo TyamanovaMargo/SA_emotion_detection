@@ -3,9 +3,11 @@
 from typing import Optional, Dict, List, Any
 import numpy as np
 import torch
+import gc
 
 from ..config import EmotionConfig
 from ..models.schemas import EmotionResult
+from ..utils.device import get_optimal_device, get_batch_size_for_device, setup_gpu_memory
 
 
 EMOTION_LABELS = [
@@ -21,6 +23,18 @@ class EmotionDetector:
         self.config = config or EmotionConfig()
         self._model = None
         self._use_fallback = False
+        
+        # Auto-detect device if set to "auto"
+        if self.config.device == "auto":
+            self.config.device = get_optimal_device()
+        
+        # Auto-detect batch size if set to 0
+        if self.config.batch_size == 0:
+            self.config.batch_size = get_batch_size_for_device(self.config.device, base_batch_size=4)
+        
+        # Setup GPU memory if using GPU
+        if self.config.device in ["cuda", "mps"]:
+            setup_gpu_memory(self.config.device, memory_fraction=0.7)
     
     def _load_model(self):
         """Load the emotion detection model."""
@@ -29,10 +43,25 @@ class EmotionDetector:
         
         try:
             from funasr import AutoModel
+            
+            # Clear GPU cache before loading
+            if self.config.device == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+            
+            print(f"Loading emotion model on device: {self.config.device}")
             self._model = AutoModel(
                 model=self.config.model_name,
-                device=self.config.device
+                device=self.config.device,
+                disable_update=True  # Skip version check for faster loading
             )
+            
+            # Move model to device explicitly
+            if self.config.device == "cuda" and hasattr(self._model, "model"):
+                self._model.model = self._model.model.cuda()
+            
+            print(f"Emotion model loaded successfully on {self.config.device}")
+            
         except Exception as e:
             print(f"Warning: Could not load emotion2vec model: {e}")
             print("Using fallback acoustic-based emotion detection.")
@@ -70,11 +99,17 @@ class EmotionDetector:
     ) -> EmotionResult:
         """Detect emotions using the loaded model."""
         try:
+            # Use configured batch size (auto-detected based on device)
             result = self._model.generate(
                 input=audio,
                 granularity="utterance",
-                extract_embedding=False
+                extract_embedding=False,
+                batch_size=self.config.batch_size
             )
+            
+            # Clear GPU cache after inference
+            if self.config.device == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             if result and len(result) > 0:
                 scores = result[0].get("scores", [])
@@ -96,6 +131,10 @@ class EmotionDetector:
                 )
         except Exception as e:
             print(f"Model detection failed: {e}, using fallback")
+            # Clear GPU memory on error
+            if self.config.device == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
         
         return self._fallback_detection(audio, sample_rate, duration)
     
@@ -210,7 +249,8 @@ class EmotionDetector:
             if len(segment) < sample_rate * 0.5:
                 continue
             
-            result = self.detect(segment, sample_rate, len(segment) / sample_rate)
+            # Use fallback for timeline to avoid memory issues with model
+            result = self._fallback_detection(segment, sample_rate, len(segment) / sample_rate)
             
             timeline.append({
                 "start_time": start_sample / sample_rate,

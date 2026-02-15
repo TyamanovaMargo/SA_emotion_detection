@@ -5,31 +5,23 @@ services:
     build: .
     container_name: hr-assessment-pipeline
     volumes:
-      # Mount your audio data (add more volumes as needed)
-      - ./audio:/app/audio:ro
+      # Mount Team Recordings folder
+      - ./Team Recordings:/app/Team Recordings:ro
       # Mount output directory
       - ./outputs:/app/outputs
-      # Mount .env file
+      # Mount .env file (optional)
       - ./.env:/app/.env:ro
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"  # Support various GPU architectures
-    # Allocate more memory for heavy models
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - EMOTION_DEVICE=${EMOTION_DEVICE:-cpu}
+    # Allocate memory for models
     mem_limit: 8g
     shm_size: 2g
-    # Use all available CPUs
+    # Use available CPUs
     cpus: "4.0"
-    # GPU support
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     # Keep container running for interactive use
     stdin_open: true
     tty: true

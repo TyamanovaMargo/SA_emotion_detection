@@ -1,6 +1,7 @@
 # Core audio processing
 librosa>=0.10.0
 soundfile>=0.12.1
+audioread>=3.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 

@@ -1,7 +1,7 @@
 """Pydantic schemas for data models."""
 
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProsodyFeatures(BaseModel):
@@ -10,11 +10,18 @@ class ProsodyFeatures(BaseModel):
     pitch_mean_hz: float = Field(description="Mean pitch in Hz")
     pitch_variance: float = Field(description="Pitch variance")
     pitch_range: float = Field(description="Pitch range (max - min)")
+    pitch_slope: float = Field(default=0.0, description="Pitch trend over time: >0 rising, <0 falling")
     energy_level: str = Field(description="Energy level: low/medium/high")
     energy_mean: float = Field(description="Mean energy/RMS value")
+    energy_std: float = Field(default=0.0, description="Energy standard deviation")
+    energy_range: float = Field(default=0.0, description="Energy range (max - min)")
     pauses_per_minute: float = Field(description="Number of pauses per minute")
     pause_duration_mean: float = Field(description="Mean pause duration in seconds")
+    pause_duration_std: float = Field(default=0.0, description="Pause duration standard deviation")
+    long_pauses_count: int = Field(default=0, description="Number of pauses > 1 second")
     articulation_rate: float = Field(description="Articulation rate (syllables per second)")
+    speech_to_silence_ratio: float = Field(default=0.0, description="Ratio of speech time to silence time")
+    rhythm_regularity: float = Field(default=0.0, description="CV of syllable intervals (0=regular, 1=irregular)")
 
 
 class EmotionResult(BaseModel):
@@ -78,6 +85,15 @@ class BigFiveScore(BaseModel):
     score: int = Field(ge=0, le=100, description="Score from 0-100")
     confidence: int = Field(ge=0, le=100, description="Confidence percentage")
     reason: str = Field(description="Brief reason for the score")
+
+    @field_validator("score", "confidence", mode="before")
+    @classmethod
+    def coerce_to_int(cls, v):
+        if isinstance(v, float):
+            if v <= 1.0:
+                v = v * 100
+            return int(round(v))
+        return v
 
 
 class BigFiveProfile(BaseModel):
