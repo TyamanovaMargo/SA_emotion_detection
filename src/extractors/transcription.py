@@ -1,6 +1,6 @@
 """Speech-to-text transcription using Whisper."""
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 import numpy as np
 import whisper
 import torch

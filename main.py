@@ -16,6 +16,7 @@ Supports:
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -172,8 +173,8 @@ def process_single(
                         "timestamp": timestamp,
                     },
                     "transcript": transcript or None,
-                    "voice_features": result.model_dump(include={"voice_features"}).get("voice_features") if hasattr(result, "voice_features") and result.voice_features else None,
-                    "assessment": result.model_dump(exclude={"raw_response", "voice_features"} if hasattr(result, "voice_features") else {"raw_response"}),
+                    "voice_features": result.voice_features.model_dump() if result.voice_features else None,
+                    "assessment": result.model_dump(exclude={"raw_response", "voice_features"}),
                 },
                 f,
                 indent=2,
@@ -406,6 +407,7 @@ Examples:
             transcript_path = find_transcript_for_audio(args.input_path)
 
         console.print(f"\n[bold blue]Processing:[/bold blue] {args.input_path.name}")
+        start_time = time.time()
         try:
             result = process_single(
                 pipeline=pipeline,
@@ -419,11 +421,15 @@ Examples:
                 quiet=args.quiet,
                 skip_transcription=args.skip_transcription,
             )
+            elapsed_time = time.time() - start_time
+            console.print(f"\n[green]✓ Processing completed in {elapsed_time:.2f}s[/green]")
             if not args.quiet:
                 pipeline.print_summary(result)
             sys.exit(0)
 
         except Exception as e:
+            elapsed_time = time.time() - start_time
+            console.print(f"\n[red]✗ Processing failed after {elapsed_time:.2f}s[/red]")
             console.print(f"[red]Error:[/red] {e}")
             if not args.quiet:
                 import traceback
@@ -457,6 +463,7 @@ Examples:
 
         candidate_id = args.candidate_id or audio_path.stem
 
+        start_time = time.time()
         try:
             result = process_single(
                 pipeline=pipeline,
@@ -470,6 +477,9 @@ Examples:
                 quiet=args.quiet,
                 skip_transcription=args.skip_transcription,
             )
+            elapsed_time = time.time() - start_time
+            console.print(f"  [green]✓ Completed in {elapsed_time:.2f}s[/green]")
+            
             all_results.append((audio_path, result))
 
             if args.group_by_folder:
@@ -477,7 +487,8 @@ Examples:
                 grouped_results.setdefault(group, []).append(result)
 
         except Exception as e:
-            console.print(f"  [red]Error:[/red] {e}")
+            elapsed_time = time.time() - start_time
+            console.print(f"  [red]✗ Failed after {elapsed_time:.2f}s - Error:[/red] {e}")
             errors.append((audio_path, str(e)))
 
     # Print batch summary table

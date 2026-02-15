@@ -13,6 +13,7 @@ from ..models.schemas import (
     BigFiveProfile,
     BigFiveScore,
     MotivationAssessment,
+    EngagementAssessment,
 )
 from .prompt_templates import HR_ASSESSMENT_PROMPT, STRUCTURED_OUTPUT_PROMPT
 
@@ -64,6 +65,7 @@ class GroqHRAssessor:
         result = self._parse_response(structured_response, raw_response)
         result.candidate_id = input_data.candidate_id
         result.position = input_data.position
+        result.voice_features = input_data.voice_features
         
         return result
     
@@ -178,16 +180,50 @@ class GroqHRAssessor:
         )
         
         motivation_data = data.get("motivation", {})
+        
+        # Fallback: compute motivation_score if not provided by LLM
+        if "motivation_score" not in motivation_data:
+            motivation_level = motivation_data.get("overall_level", "Medium")
+            motivation_score = {"High": 75, "Medium": 50, "Low": 25}.get(motivation_level, 50)
+        else:
+            motivation_score = motivation_data["motivation_score"]
+        
         motivation = MotivationAssessment(
             overall_level=motivation_data.get("overall_level", "Medium"),
+            motivation_score=motivation_score,
             pattern=motivation_data.get("pattern", "Unable to determine pattern"),
             voice_indicators=motivation_data.get("voice_indicators", []),
             content_indicators=motivation_data.get("content_indicators", []),
         )
         
+        # Fallback: compute engagement if not provided by LLM
+        engagement_data = data.get("engagement", {})
+        if not engagement_data:
+            extraversion_score = big_five.extraversion.score
+            engagement_score = int(0.6 * motivation_score + 0.4 * extraversion_score)
+            engagement_level = "High" if engagement_score >= 70 else "Medium" if engagement_score >= 40 else "Low"
+            engagement = EngagementAssessment(
+                overall_level=engagement_level,
+                engagement_score=engagement_score,
+                reason=f"Derived from motivation ({motivation_score}) and extraversion ({extraversion_score})"
+            )
+        else:
+            if "engagement_score" not in engagement_data:
+                engagement_level = engagement_data.get("overall_level", "Medium")
+                engagement_score = {"High": 75, "Medium": 50, "Low": 25}.get(engagement_level, 50)
+            else:
+                engagement_score = engagement_data["engagement_score"]
+            
+            engagement = EngagementAssessment(
+                overall_level=engagement_data.get("overall_level", "Medium"),
+                engagement_score=engagement_score,
+                reason=engagement_data.get("reason", "Based on voice analysis")
+            )
+        
         return HRAssessmentResult(
             big_five=big_five,
             motivation=motivation,
+            engagement=engagement,
             trait_strengths=data.get("trait_strengths", []),
             motivation_strengths=data.get("motivation_strengths", []),
             personality_development_areas=data.get("personality_development_areas", []),
@@ -210,9 +246,15 @@ class GroqHRAssessor:
             ),
             motivation=MotivationAssessment(
                 overall_level="Medium",
+                motivation_score=50,
                 pattern="Unable to parse - see raw response",
                 voice_indicators=["See raw response for details"],
                 content_indicators=["See raw response for details"],
+            ),
+            engagement=EngagementAssessment(
+                overall_level="Medium",
+                engagement_score=50,
+                reason="Unable to parse - see raw response"
             ),
             trait_strengths=["See raw response for details"],
             motivation_strengths=["See raw response for details"],

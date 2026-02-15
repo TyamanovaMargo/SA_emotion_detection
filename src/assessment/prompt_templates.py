@@ -12,37 +12,75 @@ HR_ASSESSMENT_PROMPT = """You are an expert HR psychologist specializing in **vo
 
 {transcript_section}
 
-=== MOTIVATION & ENGAGEMENT ASSESSMENT ===
+=== MOTIVATION & ENGAGEMENT ASSESSMENT (STABLE SCORING) ===
 
-Motivation is detectable from voice independently of words. Use ALL the numeric values above.
+You MUST compute two numeric scores using ONLY voice features with EXACT formulas below.
+These scores ensure consistency across multiple recordings of the same person.
 
-**HIGH motivation voice signature (score if MOST indicators match, not all):**
-- Energy: energy_mean >0.04 OR energy_std >0.02 OR energy_range >0.06
-- Pace: speaking_rate >130 wpm OR articulation_rate >3.5
-- Pitch: pitch_variance >400 OR pitch_range >120 Hz OR pitch_slope >0
-- Fluency: pauses_per_minute <5 OR long_pauses_count <=1 OR speech_to_silence_ratio >4
-- Voice quality: clear voice (HNR >15 dB, jitter <0.5%)
-- Emotion: positive valence (happy/surprised >0.3) OR neutral with high confidence
-- Rhythm: rhythm_regularity 0.2-0.6 (controlled)
+**STEP 1: Compute motivation_score (0-100)**
 
-**Scoring rule:** If 4+ categories show HIGH signals → overall HIGH. If 2-3 → MEDIUM. If 0-1 → LOW.
+Start: motivation_score = 50
 
-**LOW motivation voice signature:**
-- Energy: energy_mean <0.02 AND energy_std <0.008 (very flat)
-- Pace: speaking_rate <90 wpm AND articulation_rate <2.5
-- Pitch: pitch_variance <200 AND pitch_range <50 Hz AND pitch_slope <-0.5
-- Fluency: pauses_per_minute >8 AND long_pauses_count >4
-- Voice quality: rough voice (HNR <10 dB, jitter >1.0%)
-- Emotion: sad/fearful dominant (>0.4) with low confidence
-- Rhythm: rhythm_regularity >0.9 (very erratic)
+Apply adjustments (use exact thresholds):
 
-**MEDIUM motivation:** Between HIGH and LOW, or mixed signals.
+Energy (prosody.energy_mean):
+- if energy_mean >= 0.06: +15
+- if energy_mean <= 0.03: -15
+- otherwise: 0
+
+Pace (prosody.speaking_rate_wpm):
+- if speaking_rate_wpm >= 150: +15
+- if speaking_rate_wpm <= 110: -15
+- otherwise: 0
+
+Pauses (prosody.pauses_per_minute):
+- if pauses_per_minute <= 3: +10
+- if pauses_per_minute >= 6: -10
+- otherwise: 0
+
+Pitch dynamics (prosody.pitch_variance):
+- if pitch_variance >= 800: +10
+- if pitch_variance <= 300: -10
+- otherwise: 0
+
+Emotion (emotions.primary_emotion + emotions.confidence):
+- if primary_emotion in {{happy, surprised}} AND confidence >= 0.50: +10
+- if primary_emotion in {{sad, fearful}} AND confidence >= 0.50: -10
+- otherwise: 0
+
+Final: Clamp motivation_score to [0, 100]
+
+**STEP 2: Compute engagement_score (0-100)**
+
+engagement_score = round(0.6 * motivation_score + 0.4 * extraversion_score)
+
+where extraversion_score is the Big Five Extraversion score (0-100).
+
+**STEP 3: Convert scores to stable levels with hysteresis**
+
+Base level mapping:
+- 0-39: Low
+- 40-69: Medium
+- 70-100: High
+
+HYSTERESIS RULE (prevents flickering):
+If score is within 7 points of boundary (33-46 or 63-77):
+  - Set level to "Medium"
+  - Add "borderline" to pattern description
+
+Examples:
+- motivation_score=38 → level="Medium", pattern="borderline consistent"
+- motivation_score=71 → level="Medium", pattern="borderline rising"
+- motivation_score=25 → level="Low", pattern="consistent"
 
 **MOTIVATION PATTERN (use pitch_slope):**
-- pitch_slope >0.3 → "rising" (builds engagement over time)
-- pitch_slope <-0.3 → "falling" (loses engagement)
-- pitch_slope between -0.3 and 0.3 → "consistent"
-- If energy_std is very high → "fluctuating"
+- pitch_slope > 0.3: "rising" (builds engagement)
+- pitch_slope < -0.3: "falling" (loses engagement)
+- pitch_slope between -0.3 and 0.3: "consistent"
+- If energy_std > 0.03: add "fluctuating"
+
+**REQUIRED: voice_indicators must cite exact values used:**
+Example: ["energy_mean=0.028 (low)", "speaking_rate_wpm=104 (slow)", "pauses_per_minute=7.2 (high)", "pitch_variance=250 (low)"]
 
 === PERSONALITY FROM VOICE ===
 
@@ -99,9 +137,15 @@ STRUCTURED_OUTPUT_PROMPT = """Based on your analysis above, now provide a struct
   }},
   "motivation": {{
     "overall_level": "<High/Medium/Low>",
+    "motivation_score": <0-100>,
     "pattern": "<description of pattern>",
     "voice_indicators": ["<indicator1>", "<indicator2>", ...],
     "content_indicators": ["<indicator1>", "<indicator2>", ...]
+  }},
+  "engagement": {{
+    "overall_level": "<High/Medium/Low>",
+    "engagement_score": <0-100>,
+    "reason": "<1-2 sentences explaining engagement level based on voice>"
   }},
   "trait_strengths": ["<strength1>", "<strength2>", "<strength3>"],
   "motivation_strengths": ["<strength1>", "<strength2>", "<strength3>"],

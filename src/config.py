@@ -54,7 +54,7 @@ class GroqConfig(BaseModel):
     api_key: str = Field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
     model: str = Field(default="llama-3.3-70b-versatile", description="Groq model to use")
     max_tokens: int = Field(default=4096, description="Maximum tokens in response")
-    temperature: float = Field(default=0.3, description="Temperature for generation")
+    temperature: float = Field(default=0.0, description="Temperature for generation (0.0 for deterministic)")
 
 
 class PipelineConfig(BaseModel):

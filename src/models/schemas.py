@@ -108,9 +108,17 @@ class BigFiveProfile(BaseModel):
 class MotivationAssessment(BaseModel):
     """Motivation level assessment."""
     overall_level: str = Field(description="High/Medium/Low")
+    motivation_score: int = Field(ge=0, le=100, description="Numeric motivation score 0-100")
     pattern: str = Field(description="Pattern description")
     voice_indicators: List[str] = Field(description="Key indicators from voice")
     content_indicators: List[str] = Field(description="Key indicators from content")
+
+
+class EngagementAssessment(BaseModel):
+    """Engagement level assessment."""
+    overall_level: str = Field(description="High/Medium/Low")
+    engagement_score: int = Field(ge=0, le=100, description="Numeric engagement score 0-100")
+    reason: str = Field(description="Explanation of engagement level")
 
 
 class HRAssessmentResult(BaseModel):
@@ -120,6 +128,7 @@ class HRAssessmentResult(BaseModel):
     
     big_five: BigFiveProfile
     motivation: MotivationAssessment
+    engagement: EngagementAssessment
     
     trait_strengths: List[str] = Field(description="Top trait strengths")
     motivation_strengths: List[str] = Field(description="Top motivation strengths")
@@ -129,4 +138,5 @@ class HRAssessmentResult(BaseModel):
     
     hr_summary: str = Field(description="3-sentence HR summary")
     
+    voice_features: Optional["VoiceFeatures"] = Field(default=None, description="Detailed voice features")
     raw_response: Optional[str] = Field(default=None, description="Raw Claude response")

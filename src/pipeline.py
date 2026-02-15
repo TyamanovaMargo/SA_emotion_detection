@@ -153,11 +153,10 @@ class HRAssessmentPipeline:
             progress.update(task, description="Detecting emotions...")
             emotions = self.emotion_detector.detect(audio, sample_rate, duration)
             
-            # Skip emotion timeline to reduce memory usage
-            # Uncomment if you have enough RAM (16GB+)
-            # progress.update(task, description="Building emotion timeline...")
-            # emotion_timeline = self.emotion_detector.detect_timeline(audio, sample_rate)
-            # emotions.emotion_timeline = emotion_timeline
+            # Build emotion timeline for detailed emotion analysis
+            progress.update(task, description="Building emotion timeline...")
+            emotion_timeline = self.emotion_detector.detect_timeline(audio, sample_rate)
+            emotions.emotion_timeline = emotion_timeline
             
             progress.update(task, description="Extracting acoustic features...")
             egemaps = self.egemaps_extractor.extract(audio, sample_rate)
@@ -337,12 +336,39 @@ class HRAssessmentPipeline:
             bar = "█" * (score.score // 5) + "░" * (20 - score.score // 5)
             console.print(f"  {trait.capitalize():18} [{bar}] {score.score}/100 ({score.confidence}% conf)")
         
-        console.print(f"\n[bold yellow]Motivation Level:[/bold yellow] {result.motivation.overall_level}")
+        # Motivation & Engagement visualization
+        console.print("\n[bold yellow]Motivation & Engagement Analysis:[/bold yellow]")
+        
+        # Use motivation_score from result
+        motivation_score = result.motivation.motivation_score
+        
+        # Color-coded motivation bar
+        motivation_color = {
+            "High": "green",
+            "Medium": "yellow", 
+            "Low": "red"
+        }.get(result.motivation.overall_level, "white")
+        
+        motivation_bar = "█" * (motivation_score // 5) + "░" * (20 - motivation_score // 5)
+        console.print(f"  Overall Motivation [{motivation_bar}] [{motivation_color}]{result.motivation.overall_level}[/{motivation_color}] ({motivation_score}/100)")
         console.print(f"  Pattern: {result.motivation.pattern}")
+        
         if result.motivation.voice_indicators:
-            console.print("  Voice indicators:")
+            console.print("\n  [bold cyan]Voice-Based Indicators:[/bold cyan]")
             for ind in result.motivation.voice_indicators[:5]:
                 console.print(f"    • {ind}")
+        
+        # Use engagement_score from result
+        engagement_score = result.engagement.engagement_score
+        engagement_color = {
+            "High": "green",
+            "Medium": "yellow",
+            "Low": "red"
+        }.get(result.engagement.overall_level, "white")
+        engagement_bar = "█" * (engagement_score // 5) + "░" * (20 - engagement_score // 5)
+        
+        console.print(f"\n  Engagement Level   [{engagement_bar}] [{engagement_color}]{result.engagement.overall_level}[/{engagement_color}] ({engagement_score}/100)")
+        console.print(f"  [dim]{result.engagement.reason}[/dim]")
         
         console.print("\n[bold green]Key Strengths:[/bold green]")
         for strength in result.trait_strengths[:3]:
