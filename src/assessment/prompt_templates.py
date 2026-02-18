@@ -254,3 +254,129 @@ STRUCTURED_OUTPUT_PROMPT = """Based on your analysis above, now provide a struct
 }}
 
 Return ONLY the JSON, no additional text."""
+
+
+APPROXIMATE_ASSESSMENT_PROMPT = """You are a voice-analytics expert. You have been given a comprehensive set of granular voice features extracted from an audio recording.
+
+Your task: provide **APPROXIMATE** personality (Big Five), motivation, and engagement estimates based **solely on voice features**. These are indicative signals, NOT clinical scores.
+
+=== GRANULAR VOICE FEATURES ===
+{granular_features_json}
+
+=== EMOTION TIMELINE SUMMARY ===
+{emotion_timeline_summary}
+
+=== INSTRUCTIONS ===
+
+1. For each Big Five trait (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism):
+   - Give an **approximate label**: "low", "moderate-low", "moderate", "moderate-high", or "high"
+   - Give a **score range** (e.g. "55–70")
+   - List 2-4 **specific voice features** that influenced your estimate, citing exact values
+   - Use these mappings:
+     * **Extraversion**: energy_mean, speaking_rate_wpm, arousal_proxy, speech_to_silence_ratio, voiced_ratio
+     * **Openness**: pitch_range, pitch_variance, pitch_cv, spectral_centroid_mean, energy_range, dynamic_range_db
+     * **Conscientiousness**: rhythm_regularity, pause_duration_std, energy_cv, articulation_to_speech_ratio
+     * **Agreeableness**: hnr_mean_db, jitter_local, shimmer_local, valence_proxy, pitch_variance
+     * **Neuroticism**: jitter_local, jitter_rap, shimmer_local, hnr_mean_db, long_pauses_count, energy_cv
+
+2. For **Motivation** (approximate):
+   - Label: "low", "moderate", or "high"
+   - Score range (e.g. "60–75")
+   - Key voice features: energy_mean, speaking_rate_wpm, pitch_slope, arousal_proxy, speech_to_silence_ratio
+
+3. For **Engagement** (approximate):
+   - Label: "low", "moderate", or "high"
+   - Score range
+   - Key voice features: energy_std, pitch_variance, arousal_proxy, spectral_flux_mean, voiced_ratio
+
+**IMPORTANT:**
+- All estimates are APPROXIMATE — label them clearly as such
+- Always cite the exact feature name and its value
+- These are voice-based indicators, not definitive psychological assessments
+- Consider the emotion timeline trends (rising/falling arousal and valence) in your reasoning
+
+=== OUTPUT FORMAT (JSON only) ===
+
+{{
+  "big5_approximate": {{
+    "openness": {{"label": "<label>", "score_range": "<range>", "influencing_features": ["feature=value (reason)", ...]}},
+    "conscientiousness": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
+    "extraversion": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
+    "agreeableness": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
+    "neuroticism": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}}
+  }},
+  "motivation_approximate": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
+  "engagement_approximate": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}}
+}}
+
+Return ONLY the JSON, no additional text."""
+
+
+EMOTION_SUMMARY_BLOCK = """
+=== FUSED EMOTION SUMMARY (from dual-model analysis) ===
+
+Two independent emotion models (MERaLiON-SER and emotion2vec) analysed {total_segments} overlapping 8-second audio segments.
+Their outputs were fused using temperature-scaled weighted averaging (MERaLiON weight=0.65, emotion2vec weight=0.35).
+
+{emotion_summary_json}
+
+**How to use this data for personality assessment:**
+
+1. **Extraversion**: High arousal_mean (>0.3) + positive valence_mean (>0.2) + low neutral_ratio (<0.3) → higher Extraversion.
+   Low arousal + high neutral_ratio → lower Extraversion.
+
+2. **Neuroticism**: High emotion_volatility (>0.5) + negative valence_mean (<-0.2) + many "fearful"/"sad" segments → higher Neuroticism.
+   Stable emotions + positive/neutral valence → lower Neuroticism.
+
+3. **Agreeableness**: Positive valence_mean + moderate arousal (0.1-0.5) + low volatility → higher Agreeableness.
+   Negative valence + high arousal (aggressive pattern) → lower Agreeableness.
+
+4. **Openness**: High emotion_volatility (varied emotional expression) + wide valence_std + varied emotion_distribution → higher Openness.
+   Flat, monotone emotional pattern → lower Openness.
+
+5. **Conscientiousness**: Low emotion_volatility + stable arousal (low arousal_std) + high avg_confidence → higher Conscientiousness.
+   Erratic emotions + low confidence → lower Conscientiousness.
+
+6. **Motivation**: Rising arousal_trend + positive valence_trend + high avg_confidence → higher motivation.
+   Falling arousal + negative valence_trend → lower motivation.
+
+7. **Model agreement**: High model_agreement_rate (>0.6) increases confidence in emotion-based inferences.
+   Low agreement (<0.3) means emotion signals are ambiguous — reduce weight on emotion-based traits.
+
+**MANDATORY**: For every Big Five trait, cite at least one emotion summary metric alongside voice features.
+Example: "Neuroticism=35 — emotion_volatility=0.22 (stable), valence_mean=0.1 (slightly positive), arousal_std=0.15 (consistent)"
+"""
+
+
+ABLATION_PROMPT = """You previously assessed this candidate using ONLY prosody and acoustic features (no emotion summary).
+Now you have access to the FUSED EMOTION SUMMARY below, derived from two independent emotion models.
+
+=== PREVIOUS ASSESSMENT (baseline, without emotion data) ===
+{baseline_json}
+
+=== FUSED EMOTION SUMMARY ===
+{emotion_summary_json}
+
+=== TASK ===
+Re-evaluate the Big Five scores considering the emotion summary.
+For each trait that CHANGED, explain:
+1. The old score and reasoning
+2. The new score and reasoning
+3. Which emotion metrics caused the change
+
+Return JSON:
+{{{{
+  "big_five_updated": {{{{
+    "openness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason citing emotion metrics>"}}}},
+    "conscientiousness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
+    "extraversion": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
+    "agreeableness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
+    "neuroticism": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}}
+  }}}},
+  "changes": [
+    {{{{"trait": "<trait>", "old_score": <N>, "new_score": <N>, "delta": <N>, "emotion_metrics_cited": ["<metric>=<value>", ...]}}}}
+  ],
+  "emotion_impact_summary": "<1-2 sentences on how emotion data improved the assessment>"
+}}}}
+
+Return ONLY the JSON."""

@@ -28,8 +28,8 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (--ignore-installed to handle system-pkg conflicts like blinker)
+RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -40,6 +40,7 @@ RUN mkdir -p outputs team_reports
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV GROQ_API_KEY=""
+ENV HF_TOKEN=""
 
 # Expose port for API (optional)
 EXPOSE 8000

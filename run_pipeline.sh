@@ -12,6 +12,15 @@
 
 set -e
 
+# Persistent model cache — avoids re-downloading on every run
+MODEL_CACHE_DIR="$(pwd)/.model_cache"
+mkdir -p "$MODEL_CACHE_DIR"
+
+# Load environment variables from .env file
+if [ -f .env ]; then
+  export $(grep -v '^#' .env | grep -v '^$' | xargs)
+fi
+
 echo "=== HR Assessment Pipeline - Multi-GPU Selection ==="
 echo ""
 
@@ -52,7 +61,7 @@ else
   GPU1_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader -i $GPU1)
   GPU1_FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i $GPU1)
   echo "   GPU $GPU0 ($GPU0_NAME, $(echo "scale=1; $GPU0_FREE/1024" | bc) GB free) → Whisper"
-  echo "   GPU $GPU1 ($GPU1_NAME, $(echo "scale=1; $GPU1_FREE/1024" | bc) GB free) → Emotion2vec"
+  echo "   GPU $GPU1 ($GPU1_NAME, $(echo "scale=1; $GPU1_FREE/1024" | bc) GB free) → MERaLiON-SER / Emotion"
   DOCKER_GPUS="\"device=$GPU0,$GPU1\""
   # Inside container, GPUs are remapped to 0,1
   WHISPER_GPU=0
@@ -75,12 +84,16 @@ docker run -d --name hr-assessment-pipeline \
   -v "$(pwd)/Team Recordings:/app/Team Recordings:ro" \
   -v "$(pwd)/outputs:/app/outputs" \
   -v "$(pwd)/.env:/app/.env:ro" \
+  -v "$MODEL_CACHE_DIR:/root/.cache" \
   -e GROQ_API_KEY \
+  -e HF_TOKEN \
   -e WHISPER_DEVICE=cuda \
   -e WHISPER_GPU=$WHISPER_GPU \
   -e EMOTION_DEVICE=cuda \
   -e EMOTION_GPU=$EMOTION_GPU \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  -e HF_HOME=/root/.cache/huggingface \
+  -e MODELSCOPE_CACHE=/root/.cache/modelscope \
   --shm-size=8g \
   hr-assessment-pipeline tail -f /dev/null
 

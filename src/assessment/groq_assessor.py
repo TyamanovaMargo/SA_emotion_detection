@@ -15,7 +15,10 @@ from ..models.schemas import (
     MotivationAssessment,
     EngagementAssessment,
 )
-from .prompt_templates import HR_ASSESSMENT_PROMPT, STRUCTURED_OUTPUT_PROMPT
+from .prompt_templates import (
+    HR_ASSESSMENT_PROMPT, STRUCTURED_OUTPUT_PROMPT, APPROXIMATE_ASSESSMENT_PROMPT,
+    EMOTION_SUMMARY_BLOCK, ABLATION_PROMPT,
+)
 from .motivation_scorer import MotivationScorer
 
 
@@ -43,17 +46,22 @@ class GroqHRAssessor:
             self._client = Groq(api_key=self.config.api_key)
         return self._client
     
-    def assess(self, input_data: HRAssessmentInput) -> HRAssessmentResult:
+    def assess(
+        self,
+        input_data: HRAssessmentInput,
+        emotion_summary: dict = None,
+    ) -> HRAssessmentResult:
         """
         Perform HR assessment on candidate data.
         
         Args:
             input_data: HRAssessmentInput containing transcript and voice features
+            emotion_summary: Optional fused emotion summary dict to enrich the prompt
             
         Returns:
             HRAssessmentResult with personality and motivation analysis
         """
-        prompt = self._build_prompt(input_data)
+        prompt = self._build_prompt(input_data, emotion_summary=emotion_summary)
         
         response = self.client.chat.completions.create(
             model=self.config.model,
@@ -75,7 +83,7 @@ class GroqHRAssessor:
         
         return result
     
-    def _build_prompt(self, input_data: HRAssessmentInput) -> str:
+    def _build_prompt(self, input_data: HRAssessmentInput, emotion_summary: dict = None) -> str:
         """Build the assessment prompt from input data."""
         voice = input_data.voice_features
         prosody = voice.prosody
@@ -183,6 +191,14 @@ class GroqHRAssessor:
             compact_data_json=compact_data_json,
             transcript_section=transcript_section,
         )
+
+        # Append fused emotion summary if available
+        if emotion_summary and not emotion_summary.get("error"):
+            emo_json = json.dumps(emotion_summary, indent=2)
+            prompt += EMOTION_SUMMARY_BLOCK.format(
+                total_segments=emotion_summary.get("total_segments", "?"),
+                emotion_summary_json=emo_json,
+            )
 
         return prompt
     
@@ -307,6 +323,173 @@ class GroqHRAssessor:
             raw_response=raw_response,
         )
     
+    def assess_approximate(
+        self,
+        granular_features: dict,
+        emotion_timeline_rich: list,
+    ) -> "ApproximateAssessment":
+        """
+        Get approximate Big5 / motivation / engagement from granular voice features.
+
+        Returns an ApproximateAssessment with trait labels, score ranges,
+        and the specific voice features that influenced each estimate.
+        """
+        from ..models.schemas import ApproximateAssessment, ApproximateTraitEstimate
+
+        granular_json = json.dumps(
+            {k: v for k, v in granular_features.items()},
+            indent=2,
+        )
+
+        # Build compact emotion timeline summary
+        if emotion_timeline_rich:
+            emo_counts: dict = {}
+            val_sum = ar_sum = 0.0
+            for seg in emotion_timeline_rich:
+                emo = seg.get("emotion", "neutral")
+                emo_counts[emo] = emo_counts.get(emo, 0) + 1
+                val_sum += seg.get("valence", 0)
+                ar_sum += seg.get("arousal", 0)
+            n = len(emotion_timeline_rich)
+            timeline_summary = json.dumps({
+                "segments": n,
+                "emotion_distribution": emo_counts,
+                "mean_valence": round(val_sum / n, 3),
+                "mean_arousal": round(ar_sum / n, 3),
+            }, indent=2)
+        else:
+            timeline_summary = "No emotion timeline data available."
+
+        prompt = APPROXIMATE_ASSESSMENT_PROMPT.format(
+            granular_features_json=granular_json,
+            emotion_timeline_summary=timeline_summary,
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                max_tokens=2048,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.choices[0].message.content
+
+            json_match = re.search(r'\{[\s\S]*\}', raw)
+            if json_match:
+                data = json.loads(json_match.group())
+            else:
+                raise ValueError("No JSON found in approximate response")
+
+            big5 = {}
+            for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
+                td = data.get("big5_approximate", {}).get(trait, {})
+                big5[trait] = ApproximateTraitEstimate(
+                    label=td.get("label", "moderate"),
+                    score_range=td.get("score_range", "40–60"),
+                    influencing_features=td.get("influencing_features", []),
+                )
+
+            mot = data.get("motivation_approximate", {})
+            eng = data.get("engagement_approximate", {})
+
+            return ApproximateAssessment(
+                big5_approximate=big5,
+                motivation_approximate=ApproximateTraitEstimate(
+                    label=mot.get("label", "moderate"),
+                    score_range=mot.get("score_range", "40–60"),
+                    influencing_features=mot.get("influencing_features", []),
+                ),
+                engagement_approximate=ApproximateTraitEstimate(
+                    label=eng.get("label", "moderate"),
+                    score_range=eng.get("score_range", "40–60"),
+                    influencing_features=eng.get("influencing_features", []),
+                ),
+            )
+        except Exception as e:
+            print(f"Warning: approximate assessment failed: {e}")
+            default = ApproximateTraitEstimate(label="moderate", score_range="40–60", influencing_features=["assessment unavailable"])
+            return ApproximateAssessment(
+                big5_approximate={t: default for t in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism")},
+                motivation_approximate=default,
+                engagement_approximate=default,
+            )
+
+    def assess_with_ablation(
+        self,
+        input_data: HRAssessmentInput,
+        emotion_summary: dict,
+    ) -> dict:
+        """
+        Run ablation: LLM sees baseline Big5 (from enriched result) then
+        re-evaluates with explicit emotion summary, returning deltas.
+
+        Returns dict with: baseline_big5, enriched_big5, changes, impact_summary.
+        """
+        # Extract baseline Big Five from the already-completed enriched assessment
+        # (The main assess() already received the emotion summary in the prompt.)
+        # For ablation, we ask the LLM to re-evaluate explicitly.
+        baseline_result = self.assess(input_data, emotion_summary=None)
+        baseline_b5 = {}
+        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
+            s = getattr(baseline_result.big_five, trait)
+            baseline_b5[trait] = {"score": s.score, "confidence": s.confidence, "reason": s.reason}
+
+        baseline_json = json.dumps(baseline_b5, indent=2)
+        emo_json = json.dumps(emotion_summary, indent=2)
+
+        prompt = ABLATION_PROMPT.format(
+            baseline_json=baseline_json,
+            emotion_summary_json=emo_json,
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                max_tokens=2048,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.choices[0].message.content
+
+            json_match = re.search(r'\{[\s\S]*\}', raw)
+            if json_match:
+                data = json.loads(json_match.group())
+            else:
+                raise ValueError("No JSON in ablation response")
+
+            enriched_b5 = data.get("big_five_updated", {})
+            changes = data.get("changes", [])
+            impact = data.get("emotion_impact_summary", "")
+
+            # Compute deltas if not provided
+            if not changes:
+                for trait in baseline_b5:
+                    old_s = baseline_b5[trait]["score"]
+                    new_s = enriched_b5.get(trait, {}).get("score", old_s)
+                    delta = new_s - old_s
+                    if delta != 0:
+                        changes.append({
+                            "trait": trait,
+                            "old_score": old_s,
+                            "new_score": new_s,
+                            "delta": delta,
+                        })
+
+            return {
+                "baseline_big5": baseline_b5,
+                "enriched_big5": enriched_b5,
+                "changes": changes,
+                "emotion_impact_summary": impact,
+            }
+        except Exception as e:
+            print(f"Warning: ablation assessment failed: {e}")
+            return {
+                "baseline_big5": baseline_b5,
+                "enriched_big5": {},
+                "changes": [],
+                "emotion_impact_summary": f"Ablation failed: {e}",
+            }
+
     def assess_batch(
         self, 
         inputs: list[HRAssessmentInput]

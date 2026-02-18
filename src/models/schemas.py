@@ -125,6 +125,27 @@ class EngagementAssessment(BaseModel):
     reason: str = Field(description="Explanation of engagement level")
 
 
+class ApproximateTraitEstimate(BaseModel):
+    """Approximate Big Five trait estimate with contributing features."""
+    label: str = Field(description="Approximate label: low / moderate-low / moderate / moderate-high / high")
+    score_range: str = Field(default="", description="e.g. '55–70'")
+    influencing_features: List[str] = Field(default_factory=list, description="Voice features that drove this estimate")
+
+
+class ApproximateAssessment(BaseModel):
+    """Approximate motivation/engagement/Big5 from voice features only."""
+    big5_approximate: Dict[str, ApproximateTraitEstimate] = Field(
+        default_factory=dict,
+        description="Trait name → approximate estimate + influencing features"
+    )
+    motivation_approximate: Optional[ApproximateTraitEstimate] = Field(
+        default=None, description="Approximate motivation label + features"
+    )
+    engagement_approximate: Optional[ApproximateTraitEstimate] = Field(
+        default=None, description="Approximate engagement label + features"
+    )
+
+
 class HRAssessmentResult(BaseModel):
     """Complete HR assessment result."""
     candidate_id: Optional[str] = None
@@ -144,3 +165,10 @@ class HRAssessmentResult(BaseModel):
     
     voice_features: Optional["VoiceFeatures"] = Field(default=None, description="Detailed voice features")
     raw_response: Optional[str] = Field(default=None, description="Raw Claude response")
+
+    granular_voice_features: Optional[Dict[str, Any]] = Field(default=None, description="All granular voice features as flat dict")
+    emotion_timeline_rich: Optional[List[Dict[str, Any]]] = Field(default=None, description="Per-segment emotion + energy + pitch for dashboard")
+    approximate_assessment: Optional[ApproximateAssessment] = Field(default=None, description="Approximate Big5/motivation/engagement from voice")
+    dual_emotions: Optional[Dict[str, Any]] = Field(default=None, description="Side-by-side emotion results from MERaLiON-SER and emotion2vec")
+    emotion_summary: Optional[Dict[str, Any]] = Field(default=None, description="Aggregated emotion stats: volatility, valence/arousal trends, agreement rate")
+    llm_comparison: Optional[Dict[str, Any]] = Field(default=None, description="Ablation: baseline vs enriched LLM assessment with deltas")

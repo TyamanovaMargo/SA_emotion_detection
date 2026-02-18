@@ -196,6 +196,27 @@ class HRAssessmentPipeline:
                 language_profile=language_profile,
             )
             
+            # Extract granular voice features for dashboard & approximate assessment
+            progress.update(task, description="Extracting granular voice features...")
+            granular_features = self.prosody_extractor.extract_granular(
+                audio, sample_rate, transcription.word_count, duration
+            )
+
+            # Dual-model emotion comparison (MERaLiON-SER + emotion2vec)
+            progress.update(task, description="Running dual-model emotion comparison...")
+            dual_emotions = self.emotion_detector.detect_dual(audio, sample_rate, duration)
+
+            # Build rich emotion timeline with fusion, SNR, smoothing
+            progress.update(task, description="Building fused emotion timeline...")
+            emotion_timeline_rich = self.emotion_detector.detect_emotion_timeline_dual(
+                audio, sample_rate, segment_duration=8.0, hop_duration=4.0,
+            )
+
+            # Compute emotion summary for LLM
+            progress.update(task, description="Computing emotion summary...")
+            from .extractors.emotion_fusion import compute_emotion_summary
+            emotion_summary = compute_emotion_summary(emotion_timeline_rich)
+
             progress.update(task, description="Running HR assessment with Groq LLM...")
             assessment_input = HRAssessmentInput(
                 transcript=transcription.text,
@@ -206,7 +227,29 @@ class HRAssessmentPipeline:
                 language_profile=language_profile,
             )
             
-            result = self.assessor.assess(assessment_input)
+            result = self.assessor.assess(assessment_input, emotion_summary=emotion_summary)
+
+            # Get approximate assessment from granular features
+            progress.update(task, description="Getting approximate voice-based assessment...")
+            approx = self.assessor.assess_approximate(granular_features, emotion_timeline_rich)
+
+            # Run ablation: baseline (no emotion summary) vs enriched
+            progress.update(task, description="Running emotion ablation comparison...")
+            try:
+                llm_comparison = self.assessor.assess_with_ablation(
+                    assessment_input, emotion_summary
+                )
+            except Exception as e:
+                print(f"  [warn] ablation failed: {e}")
+                llm_comparison = None
+
+            # Attach new data to result
+            result.granular_voice_features = granular_features
+            result.emotion_timeline_rich = emotion_timeline_rich
+            result.approximate_assessment = approx
+            result.dual_emotions = dual_emotions
+            result.emotion_summary = emotion_summary
+            result.llm_comparison = llm_comparison
             
             progress.update(task, description="Complete!")
         
@@ -354,6 +397,67 @@ class HRAssessmentPipeline:
         if result.position:
             console.print(f"[bold]Position:[/bold] {result.position}")
         
+        # --- Dual-model emotion comparison ---
+        dual = result.dual_emotions
+        if dual:
+            console.print("\n[bold yellow]Emotion Detection (2 models):[/bold yellow]")
+            e2v = dual.get("emotion2vec", {})
+            mer = dual.get("meralion_ser", {})
+
+            e2v_emo = e2v.get("primary_emotion", "N/A")
+            e2v_conf = e2v.get("confidence", 0)
+            mer_emo = mer.get("primary_emotion", "N/A")
+            mer_conf = mer.get("confidence", 0)
+
+            console.print(f"  {'emotion2vec':18} {e2v_emo:>12}  ({e2v_conf:.1%} conf)")
+            console.print(f"  {'MERaLiON-SER':18} {mer_emo:>12}  ({mer_conf:.1%} conf)")
+
+            agree = dual.get("models_agree")
+            if agree is True:
+                console.print("  [green]✓ Models AGREE[/green]")
+            elif agree is False:
+                console.print("  [yellow]⚠ Models DISAGREE[/yellow]")
+            else:
+                console.print("  [dim]One model unavailable[/dim]")
+
+            # Per-segment agreement rate
+            timeline = result.emotion_timeline_rich or []
+            if timeline:
+                n_agree = sum(1 for s in timeline if s.get("models_agree"))
+                rate = n_agree / len(timeline)
+                console.print(f"  Segment agreement: {n_agree}/{len(timeline)} ({rate:.0%})")
+
+            # Fused result
+            fused = dual.get("fused", {})
+            if fused:
+                f_emo = fused.get("primary_emotion", "N/A")
+                f_conf = fused.get("confidence", 0)
+                f_ent = fused.get("entropy", 0)
+                console.print(f"  {'Fused':18} {f_emo:>12}  ({f_conf:.1%} conf, entropy={f_ent:.2f})")
+
+        # --- Emotion summary ---
+        emo_sum = result.emotion_summary
+        if emo_sum and not emo_sum.get("error"):
+            console.print("\n[bold yellow]Emotion Summary (fused):[/bold yellow]")
+            console.print(f"  Dominant: {emo_sum.get('dominant_emotion', '?')} ({emo_sum.get('dominant_emotion_ratio', 0):.0%})")
+            console.print(f"  Volatility: {emo_sum.get('emotion_volatility', 0):.2f}  |  Neutral ratio: {emo_sum.get('neutral_ratio', 0):.2f}")
+            console.print(f"  Valence: mean={emo_sum.get('valence_mean', 0):.2f} std={emo_sum.get('valence_std', 0):.2f} trend={emo_sum.get('valence_trend', '?')}")
+            console.print(f"  Arousal:  mean={emo_sum.get('arousal_mean', 0):.2f} std={emo_sum.get('arousal_std', 0):.2f} trend={emo_sum.get('arousal_trend', '?')}")
+            if emo_sum.get("model_agreement_rate") is not None:
+                console.print(f"  Model agreement: {emo_sum['model_agreement_rate']:.0%}  |  Avg confidence: {emo_sum.get('avg_confidence', 0):.2f}")
+
+        # --- Ablation deltas ---
+        ablation = result.llm_comparison
+        if ablation and ablation.get("changes"):
+            console.print("\n[bold yellow]Emotion Impact on Big Five (ablation):[/bold yellow]")
+            for ch in ablation["changes"]:
+                delta = ch.get("delta", 0)
+                arrow = "[green]↑[/green]" if delta > 0 else "[red]↓[/red]"
+                console.print(f"  {ch['trait'].capitalize():18} {ch.get('old_score','?')} → {ch.get('new_score','?')} ({arrow}{abs(delta)})")
+            impact = ablation.get("emotion_impact_summary", "")
+            if impact:
+                console.print(f"  [dim]{impact}[/dim]")
+
         console.print("\n[bold yellow]Big Five Personality Profile:[/bold yellow]")
         for trait in ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"]:
             score = getattr(result.big_five, trait)

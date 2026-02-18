@@ -51,6 +51,7 @@ cache/
 *.pt
 *.bin
 *.onnx
+.model_cache/
 
 # Logs
 *.log

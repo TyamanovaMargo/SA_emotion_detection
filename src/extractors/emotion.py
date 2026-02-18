@@ -78,10 +78,13 @@ class EmotionDetector:
     
     def __init__(self, config: Optional[EmotionConfig] = None):
         self.config = config or EmotionConfig()
-        self._model = None
-        self._meralion_pipe = None
+        self._model = None              # emotion2vec
+        self._meralion_pipe = None       # kept for compat
+        self._meralion_model = None      # MERaLiON model object
+        self._meralion_processor = None  # MERaLiON feature extractor
         self._use_fallback = False
         self._backend = self.config.backend  # "meralion" or "emotion2vec"
+        self._meralion_available = False  # True if MERaLiON loaded OK
         
         # Resolve device: "auto" -> "cuda:N", "cuda" -> "cuda:N"
         if self.config.device == "auto":
@@ -105,15 +108,25 @@ class EmotionDetector:
             self._load_emotion2vec()
     
     def _load_meralion(self):
-        """Load MERaLiON-SER-v1 via HuggingFace transformers pipeline."""
-        if self._meralion_pipe is not None:
+        """Load MERaLiON-SER-v1 via direct model loading (avoids pipeline meta-tensor bug)."""
+        if self._meralion_model is not None:
             return
         
         try:
-            from transformers import pipeline as hf_pipeline
+            import os
+            from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
             
             device = self.config.device
             model_id = self.config.meralion_model
+            
+            # HuggingFace token for gated model access
+            hf_token = os.getenv("HF_TOKEN", None)
+            if not hf_token:
+                raise RuntimeError(
+                    "HF_TOKEN environment variable not set. "
+                    "MERaLiON-SER-v1 is a gated model — you need a HuggingFace token. "
+                    "Set HF_TOKEN in your .env file or pass -e HF_TOKEN=... to Docker."
+                )
             
             # Clear GPU cache before loading
             if device.startswith("cuda") and torch.cuda.is_available():
@@ -121,22 +134,34 @@ class EmotionDetector:
             
             print(f"Loading MERaLiON-SER on device: {device}")
             
-            torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+            # Patch torch.logspace to force CPU during model init (avoids meta tensor bug)
+            _orig_logspace = torch.logspace
+            def _cpu_logspace(*args, **kwargs):
+                kwargs.pop('device', None)
+                return _orig_logspace(*args, **kwargs, device='cpu')
+            torch.logspace = _cpu_logspace
+            try:
+                self._meralion_processor = AutoFeatureExtractor.from_pretrained(
+                    model_id, trust_remote_code=True, token=hf_token,
+                )
+                self._meralion_model = AutoModelForAudioClassification.from_pretrained(
+                    model_id,
+                    trust_remote_code=True,
+                    token=hf_token,
+                    low_cpu_mem_usage=False,
+                    device_map=None,
+                )
+            finally:
+                torch.logspace = _orig_logspace
+            self._meralion_model = self._meralion_model.to(device).eval()
             
-            self._meralion_pipe = hf_pipeline(
-                "audio-classification",
-                model=model_id,
-                top_k=None,
-                device=device,
-                torch_dtype=torch_dtype,
-                trust_remote_code=True,
-            )
-            
+            self._meralion_available = True
             print(f"MERaLiON-SER loaded successfully on {device}")
             
         except Exception as e:
             print(f"Warning: Could not load MERaLiON-SER: {e}")
             print("Falling back to emotion2vec...")
+            self._meralion_available = False
             self._backend = "emotion2vec"
             self._load_emotion2vec()
     
@@ -177,12 +202,75 @@ class EmotionDetector:
             print("Using fallback acoustic-based emotion detection.")
             self._use_fallback = True
     
+    def _load_both_models(self):
+        """Load both MERaLiON-SER and emotion2vec for dual comparison."""
+        # Try MERaLiON first (don't let it fallback to emotion2vec)
+        if self._meralion_model is None:
+            try:
+                import os
+                from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
+                device = self.config.device
+                model_id = self.config.meralion_model
+                hf_token = os.getenv("HF_TOKEN", None)
+                if hf_token:
+                    if device.startswith("cuda") and torch.cuda.is_available():
+                        clear_gpu_memory(device)
+                    print(f"Loading MERaLiON-SER on device: {device}")
+                    _orig_logspace = torch.logspace
+                    def _cpu_logspace(*args, **kwargs):
+                        kwargs.pop('device', None)
+                        return _orig_logspace(*args, **kwargs, device='cpu')
+                    torch.logspace = _cpu_logspace
+                    try:
+                        self._meralion_processor = AutoFeatureExtractor.from_pretrained(
+                            model_id, trust_remote_code=True, token=hf_token,
+                        )
+                        self._meralion_model = AutoModelForAudioClassification.from_pretrained(
+                            model_id, trust_remote_code=True, token=hf_token,
+                            low_cpu_mem_usage=False, device_map=None,
+                        )
+                    finally:
+                        torch.logspace = _orig_logspace
+                    self._meralion_model = self._meralion_model.to(device).eval()
+                    self._meralion_available = True
+                    print(f"MERaLiON-SER loaded successfully on {device}")
+                else:
+                    print("HF_TOKEN not set — skipping MERaLiON-SER")
+            except Exception as e:
+                print(f"Warning: Could not load MERaLiON-SER: {e}")
+                self._meralion_available = False
+        # Always load emotion2vec
+        if self._model is None:
+            try:
+                from funasr import AutoModel as FunASRAutoModel
+                device = self.config.device
+                funasr_device = device
+                if device.startswith("cuda:"):
+                    gpu_idx = int(device.split(":")[1])
+                    torch.cuda.set_device(gpu_idx)
+                    funasr_device = "cuda"
+                print(f"Loading emotion2vec on device: {device}")
+                self._model = FunASRAutoModel(
+                    model=self.config.model_name, device=funasr_device, disable_update=True
+                )
+                if device.startswith("cuda") and hasattr(self._model, "model"):
+                    gpu_idx = int(device.split(":")[1]) if ":" in device else 0
+                    self._model.model = self._model.model.to(f"cuda:{gpu_idx}")
+                print(f"Emotion2vec loaded successfully on {device}")
+            except Exception as e:
+                print(f"Warning: Could not load emotion2vec: {e}")
+
     def unload_model(self):
         """Unload emotion model and free GPU memory."""
         device = self.config.device
         if self._meralion_pipe is not None:
             del self._meralion_pipe
             self._meralion_pipe = None
+        if self._meralion_model is not None:
+            del self._meralion_model
+            self._meralion_model = None
+            self._meralion_processor = None
+            self._meralion_available = False
         if self._model is not None:
             del self._model
             self._model = None
@@ -219,7 +307,7 @@ class EmotionDetector:
         duration: float
     ) -> EmotionResult:
         """Detect emotion on a single segment."""
-        if self._backend == "meralion":
+        if self._backend == "meralion" and self._meralion_available:
             return self._meralion_detection(audio, sample_rate, duration)
         else:
             return self._emotion2vec_detection(audio, sample_rate, duration)
@@ -277,7 +365,7 @@ class EmotionDetector:
         sample_rate: int,
         duration: float
     ) -> EmotionResult:
-        """Detect emotions using MERaLiON-SER pipeline."""
+        """Detect emotions using MERaLiON-SER (direct model inference)."""
         try:
             device = self.config.device
             if device.startswith("cuda:"):
@@ -290,19 +378,36 @@ class EmotionDetector:
                 audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
                 sample_rate = 16000
             
-            # Run inference
-            results = self._meralion_pipe(
-                {"raw": audio.astype(np.float32), "sampling_rate": sample_rate}
+            # Process with feature extractor
+            inputs = self._meralion_processor(
+                audio.astype(np.float32),
+                sampling_rate=sample_rate,
+                return_tensors="pt",
             )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                outputs = self._meralion_model(**inputs)
+                # Model may return dict or ModelOutput — handle both
+                if isinstance(outputs, dict):
+                    logits = outputs.get("logits", outputs.get("output"))
+                else:
+                    logits = outputs.logits
+                if logits is None:
+                    raise ValueError(f"Unexpected model output keys: {outputs.keys() if isinstance(outputs, dict) else type(outputs)}")
+                logits = logits[0]
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()
             
             if device.startswith("cuda") and torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Parse results: list of {"label": ..., "score": ...}
+            # Map id2label (keys can be int or str depending on config)
+            id2label = self._meralion_model.config.id2label
             emotion_scores = {}
-            for item in results:
-                label = normalize_label(item["label"])
-                emotion_scores[label] = emotion_scores.get(label, 0.0) + float(item["score"])
+            for idx, prob in enumerate(probs):
+                raw_label = id2label.get(idx, id2label.get(str(idx), f"label_{idx}"))
+                label = normalize_label(raw_label)
+                emotion_scores[label] = emotion_scores.get(label, 0.0) + float(prob)
             
             # Ensure all standard labels exist
             for label in EMOTION_LABELS:
@@ -334,9 +439,15 @@ class EmotionDetector:
         self, 
         audio: np.ndarray, 
         sample_rate: int,
-        duration: float
+        duration: float,
+        skip_gates: bool = False,
     ) -> EmotionResult:
-        """Detect emotions using emotion2vec model."""
+        """Detect emotions using emotion2vec model.
+        
+        Args:
+            skip_gates: If True, skip legacy reliability gates (used by fused
+                        pipeline which has its own SNR/entropy/low_confidence signals).
+        """
         try:
             device = self.config.device
             if device.startswith("cuda:"):
@@ -368,9 +479,10 @@ class EmotionDetector:
                 primary_emotion = max(emotion_scores, key=emotion_scores.get)
                 confidence = emotion_scores[primary_emotion]
                 
-                primary_emotion, confidence = self._apply_reliability_gates(
-                    primary_emotion, confidence, emotion_scores
-                )
+                if not skip_gates:
+                    primary_emotion, confidence = self._apply_reliability_gates(
+                        primary_emotion, confidence, emotion_scores
+                    )
                 
                 return EmotionResult(
                     primary_emotion=primary_emotion,
@@ -395,8 +507,10 @@ class EmotionDetector:
         neutral_score = emotion_scores.get("neutral", 0.0)
         other_scores = [v for k, v in emotion_scores.items() if k != "neutral"]
         
-        # Gate 1: Fake-confident neutral (true silence/noise only)
-        if neutral_score > 0.98 and all(s < 0.002 for s in other_scores):
+        # Gate 1: Only filter as undetected when ALL non-neutral scores are
+        # essentially zero (< 1e-5) — i.e. pure silence/noise, not real speech.
+        # emotion2vec legitimately outputs high-confidence neutral for calm speech.
+        if neutral_score > 0.9999 and all(s < 1e-5 for s in other_scores):
             return "undetected", 0.0
         
         # Gate 2: Low separation — neutral barely beats runner-up
@@ -404,7 +518,7 @@ class EmotionDetector:
             sorted_scores = sorted(emotion_scores.values(), reverse=True)
             if len(sorted_scores) >= 2:
                 separation = sorted_scores[0] - sorted_scores[1]
-                if separation < 0.02:
+                if separation < 0.005:
                     return "undetected", 0.0
         
         return primary_emotion, confidence
@@ -586,6 +700,73 @@ class EmotionDetector:
         
         return timeline
     
+    def detect_emotion_timeline_rich(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        segment_duration: float = 10.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Per-segment emotion tracking with acoustic features for dashboard.
+
+        Each segment returns: time_start, time_end, emotion, confidence,
+        valence, arousal, rms_energy, pitch_mean.
+
+        This is separate from detect_timeline() — it uses fixed non-overlapped
+        segments and includes per-segment pitch for richer visualisation.
+        """
+        import librosa as _lr
+
+        self._load_model()
+
+        total_samples = len(audio)
+        seg_samples = int(segment_duration * sample_rate)
+        timeline: List[Dict[str, Any]] = []
+
+        pos = 0
+        while pos < total_samples:
+            end = min(pos + seg_samples, total_samples)
+            seg = audio[pos:end]
+            if len(seg) < sample_rate * 0.5:
+                break
+
+            seg_dur = len(seg) / sample_rate
+
+            # emotion
+            if not self._use_fallback and (self._meralion_model is not None or self._model is not None):
+                emo = self._single_detection(seg, sample_rate, seg_dur)
+            else:
+                emo = self._fallback_detection(seg, sample_rate, seg_dur)
+
+            label = normalize_label(emo.primary_emotion)
+            va = get_valence_arousal(label)
+
+            # energy
+            rms_energy = float(np.sqrt(np.mean(seg ** 2)))
+
+            # pitch mean
+            try:
+                f0, _, _ = _lr.pyin(seg, fmin=80, fmax=500, sr=sample_rate)
+                f0v = f0[~np.isnan(f0)]
+                pitch_mean = float(np.mean(f0v)) if len(f0v) > 0 else 0.0
+            except Exception:
+                pitch_mean = 0.0
+
+            timeline.append({
+                "time_start": round(pos / sample_rate, 2),
+                "time_end": round(end / sample_rate, 2),
+                "emotion": label,
+                "confidence": emo.confidence,
+                "valence": va["valence"],
+                "arousal": va["arousal"],
+                "rms_energy": round(rms_energy, 4),
+                "pitch_mean": round(pitch_mean, 1),
+            })
+
+            pos = end
+
+        return timeline
+
     def _median_filter_timeline(self, timeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Apply median filter to emotion timeline to suppress one-off spikes.
@@ -614,3 +795,236 @@ class EmotionDetector:
                 smoothed[i]["arousal"] = va["arousal"]
         
         return smoothed
+
+    # ------------------------------------------------------------------
+    # Dual-model comparison methods (with fusion, VAD, SNR, smoothing)
+    # ------------------------------------------------------------------
+
+    def detect_dual(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        duration: float,
+    ) -> Dict[str, Any]:
+        """
+        Run BOTH MERaLiON-SER and emotion2vec on the same audio.
+        Returns per-model results + fused result with entropy/top2_gap.
+        """
+        from .emotion_fusion import (
+            fuse_probabilities, compute_entropy, compute_top2_gap,
+        )
+
+        self._load_both_models()
+
+        results: Dict[str, Any] = {}
+        mer_probs = None
+        e2v_probs = None
+
+        # emotion2vec
+        if self._model is not None:
+            try:
+                e2v = self._emotion2vec_detection(audio, sample_rate, duration, skip_gates=True)
+                e2v_probs = e2v.emotion_scores
+                results["emotion2vec"] = {
+                    "primary_emotion": e2v.primary_emotion,
+                    "confidence": e2v.confidence,
+                    "scores": e2v.emotion_scores,
+                    "entropy": compute_entropy(e2v.emotion_scores),
+                    "top2_gap": compute_top2_gap(e2v.emotion_scores),
+                }
+            except Exception as e:
+                results["emotion2vec"] = {"error": str(e)}
+        else:
+            results["emotion2vec"] = {"error": "model not loaded"}
+
+        # MERaLiON-SER
+        if self._meralion_available and self._meralion_model is not None:
+            try:
+                mer = self._meralion_detection(audio, sample_rate, duration)
+                mer_probs = mer.emotion_scores
+                results["meralion_ser"] = {
+                    "primary_emotion": mer.primary_emotion,
+                    "confidence": mer.confidence,
+                    "scores": mer.emotion_scores,
+                    "entropy": compute_entropy(mer.emotion_scores),
+                    "top2_gap": compute_top2_gap(mer.emotion_scores),
+                }
+            except Exception as e:
+                results["meralion_ser"] = {"error": str(e)}
+        else:
+            results["meralion_ser"] = {"error": "model not loaded (need HF_TOKEN + access)"}
+
+        # Fused result
+        fused_probs = fuse_probabilities(mer_probs, e2v_probs)
+        if fused_probs:
+            fused_emo = max(fused_probs, key=fused_probs.get)
+            results["fused"] = {
+                "primary_emotion": fused_emo,
+                "confidence": round(fused_probs[fused_emo], 4),
+                "scores": fused_probs,
+                "entropy": compute_entropy(fused_probs),
+                "top2_gap": compute_top2_gap(fused_probs),
+            }
+
+        # Agreement flag
+        e2v_emo = results.get("emotion2vec", {}).get("primary_emotion")
+        mer_emo = results.get("meralion_ser", {}).get("primary_emotion")
+        results["models_agree"] = (e2v_emo == mer_emo) if (e2v_emo and mer_emo) else None
+
+        return results
+
+    def detect_emotion_timeline_dual(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        segment_duration: float = 8.0,
+        hop_duration: float = 4.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Enhanced per-segment emotion timeline from BOTH models with:
+        - Overlapping windows (segment_duration with hop_duration)
+        - SNR filtering (skip low-SNR segments)
+        - Probability fusion (temperature-scaled weighted average)
+        - Entropy & top2_gap per segment
+        - Sticky-transition smoothing
+        - Per-segment reliability signals (low_confidence flag)
+
+        Each segment has: time_start, time_end, rms_energy, snr_db, pitch_mean,
+        per-model results, fused results, entropy, top2_gap, models_agree.
+        """
+        import librosa as _lr
+        from .emotion_fusion import (
+            fuse_probabilities, compute_entropy, compute_top2_gap,
+            estimate_noise_floor, compute_snr,
+            smooth_timeline_sticky, MIN_SNR_DB,
+        )
+
+        self._load_both_models()
+
+        total_samples = len(audio)
+        seg_samples = int(segment_duration * sample_rate)
+        hop_samples = int(hop_duration * sample_rate)
+        noise_floor = estimate_noise_floor(audio, sample_rate)
+        timeline: List[Dict[str, Any]] = []
+
+        pos = 0
+        while pos < total_samples:
+            end = min(pos + seg_samples, total_samples)
+            seg = audio[pos:end]
+            if len(seg) < sample_rate * 1.0:  # skip < 1s
+                break
+
+            seg_dur = len(seg) / sample_rate
+            rms_energy = float(np.sqrt(np.mean(seg ** 2)))
+            snr_db = compute_snr(seg, noise_floor)
+
+            # pitch mean
+            try:
+                f0, _, _ = _lr.pyin(seg, fmin=80, fmax=500, sr=sample_rate)
+                f0v = f0[~np.isnan(f0)]
+                pitch_mean = float(np.mean(f0v)) if len(f0v) > 0 else 0.0
+            except Exception:
+                pitch_mean = 0.0
+
+            entry: Dict[str, Any] = {
+                "time_start": round(pos / sample_rate, 2),
+                "time_end": round(end / sample_rate, 2),
+                "rms_energy": round(rms_energy, 4),
+                "snr_db": round(snr_db, 1),
+                "pitch_mean": round(pitch_mean, 1),
+            }
+
+            # Skip very low-SNR segments — mark as low confidence
+            if snr_db < MIN_SNR_DB:
+                entry.update({
+                    "emotion2vec_emotion": "low_snr", "emotion2vec_confidence": 0.0,
+                    "emotion2vec_valence": 0.0, "emotion2vec_arousal": 0.0,
+                    "meralion_emotion": "low_snr", "meralion_confidence": 0.0,
+                    "meralion_valence": 0.0, "meralion_arousal": 0.0,
+                    "fused_emotion": "low_snr", "fused_confidence": 0.0,
+                    "fused_scores": {}, "fused_valence": 0.0, "fused_arousal": 0.0,
+                    "entropy": 0.0, "top2_gap": 0.0,
+                    "low_confidence": True, "models_agree": None,
+                })
+                timeline.append(entry)
+                pos += hop_samples
+                continue
+
+            e2v_probs = None
+            mer_probs = None
+
+            # emotion2vec
+            if self._model is not None:
+                try:
+                    e2v = self._emotion2vec_detection(seg, sample_rate, seg_dur, skip_gates=True)
+                    label = normalize_label(e2v.primary_emotion)
+                    va = get_valence_arousal(label)
+                    e2v_probs = e2v.emotion_scores
+                    entry["emotion2vec_emotion"] = label
+                    entry["emotion2vec_confidence"] = e2v.confidence
+                    entry["emotion2vec_valence"] = va["valence"]
+                    entry["emotion2vec_arousal"] = va["arousal"]
+                except Exception:
+                    entry["emotion2vec_emotion"] = "error"
+                    entry["emotion2vec_confidence"] = 0.0
+                    entry["emotion2vec_valence"] = 0.0
+                    entry["emotion2vec_arousal"] = 0.0
+            else:
+                entry["emotion2vec_emotion"] = "unavailable"
+                entry["emotion2vec_confidence"] = 0.0
+                entry["emotion2vec_valence"] = 0.0
+                entry["emotion2vec_arousal"] = 0.0
+
+            # MERaLiON-SER
+            if self._meralion_available and self._meralion_model is not None:
+                try:
+                    mer = self._meralion_detection(seg, sample_rate, seg_dur)
+                    label = normalize_label(mer.primary_emotion)
+                    va = get_valence_arousal(label)
+                    mer_probs = mer.emotion_scores
+                    entry["meralion_emotion"] = label
+                    entry["meralion_confidence"] = mer.confidence
+                    entry["meralion_valence"] = va["valence"]
+                    entry["meralion_arousal"] = va["arousal"]
+                except Exception:
+                    entry["meralion_emotion"] = "error"
+                    entry["meralion_confidence"] = 0.0
+                    entry["meralion_valence"] = 0.0
+                    entry["meralion_arousal"] = 0.0
+            else:
+                entry["meralion_emotion"] = "unavailable"
+                entry["meralion_confidence"] = 0.0
+                entry["meralion_valence"] = 0.0
+                entry["meralion_arousal"] = 0.0
+
+            # Fused result
+            fused_probs = fuse_probabilities(mer_probs, e2v_probs)
+            if fused_probs:
+                fused_emo = max(fused_probs, key=fused_probs.get)
+                fused_conf = fused_probs[fused_emo]
+                fused_va = get_valence_arousal(fused_emo)
+                entry["fused_emotion"] = fused_emo
+                entry["fused_confidence"] = round(fused_conf, 4)
+                entry["fused_scores"] = fused_probs
+                entry["fused_valence"] = fused_va["valence"]
+                entry["fused_arousal"] = fused_va["arousal"]
+            else:
+                entry["fused_emotion"] = entry.get("meralion_emotion", entry.get("emotion2vec_emotion", "neutral"))
+                entry["fused_confidence"] = 0.0
+                entry["fused_scores"] = {}
+                entry["fused_valence"] = 0.0
+                entry["fused_arousal"] = 0.0
+
+            entry["entropy"] = compute_entropy(fused_probs) if fused_probs else 0.0
+            entry["top2_gap"] = compute_top2_gap(fused_probs) if fused_probs else 0.0
+            entry["low_confidence"] = entry["fused_confidence"] < 0.4
+            entry["models_agree"] = entry.get("emotion2vec_emotion") == entry.get("meralion_emotion")
+
+            timeline.append(entry)
+            pos += hop_samples
+
+        # Apply sticky-transition smoothing
+        if len(timeline) >= 2:
+            timeline = smooth_timeline_sticky(timeline)
+
+        return timeline
