@@ -14,21 +14,24 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_GPU=${WHISPER_GPU:-0}
       - EMOTION_DEVICE=${EMOTION_DEVICE:-cuda}
-      - CUDA_VISIBLE_DEVICES=1
+      - EMOTION_GPU=${EMOTION_GPU:-1}
+      - LANGUAGE_PROFILE=${LANGUAGE_PROFILE:-non_native_english}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
       - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH}
     # Allocate memory for models
-    shm_size: 4g
+    shm_size: 8g
     # Use available CPUs
     cpus: "8.0"
-    # GPU support - use GPU 1 specifically
+    # GPU support - expose 2 GPUs for Whisper + Emotion
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['1']
+              count: 2
               capabilities: [gpu]
     # Keep container running for interactive use
     stdin_open: true

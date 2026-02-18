@@ -1,13 +1,13 @@
-"""Speech-to-text transcription using Whisper."""
+"""Speech-to-text transcription using distil-whisper (HuggingFace transformers)."""
 
+import re
 from typing import Optional, Dict, List, Any
 import numpy as np
-import whisper
 import torch
 
 from ..config import WhisperConfig
 from ..models.schemas import TranscriptionResult
-from ..utils.device import get_optimal_device
+from ..utils.device import get_optimal_device, clear_gpu_memory
 
 
 FILLER_WORDS = [
@@ -18,34 +18,123 @@ FILLER_WORDS = [
 
 
 class WhisperTranscriber:
-    """Transcribe audio using OpenAI Whisper."""
+    """Transcribe audio using distil-whisper/distil-large-v3 via HuggingFace transformers."""
     
     def __init__(self, config: Optional[WhisperConfig] = None):
         self.config = config or WhisperConfig()
-        self._model = None
+        self._pipe = None
+        self._lang_model = None  # lightweight whisper base for language detection
         
-        # Auto-detect device if set to "auto"
+        # Resolve device: "auto" -> "cuda:N", "cuda" -> "cuda:N"
         if self.config.device == "auto":
-            self.config.device = get_optimal_device()
+            self.config.device = get_optimal_device(gpu_index=self.config.gpu_index)
+        elif self.config.device == "cuda":
+            self.config.device = f"cuda:{self.config.gpu_index}"
     
     @property
     def model(self):
-        """Lazy load the Whisper model."""
-        if self._model is None:
-            print(f"Loading Whisper model on device: {self.config.device}")
+        """Lazy load the distil-whisper pipeline."""
+        if self._pipe is None:
+            device = self.config.device
+            model_id = self.config.model_name
+            print(f"Loading Whisper model '{model_id}' on device: {device}")
             
             # Clear GPU cache before loading
-            if self.config.device == "cuda" and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if device.startswith("cuda") and torch.cuda.is_available():
+                clear_gpu_memory(device)
             
-            self._model = whisper.load_model(
-                self.config.model_name, 
-                device=self.config.device
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+            
+            torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+            
+            hf_model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_id,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            )
+            hf_model.to(device)
+            
+            processor = AutoProcessor.from_pretrained(model_id)
+            
+            self._pipe = pipeline(
+                "automatic-speech-recognition",
+                model=hf_model,
+                tokenizer=processor.tokenizer,
+                feature_extractor=processor.feature_extractor,
+                torch_dtype=torch_dtype,
+                device=device,
             )
             
-            print(f"Whisper model loaded successfully on {self.config.device}")
-        return self._model
+            print(f"Whisper model loaded successfully on {device}")
+        return self._pipe
     
+    def _get_lang_model(self):
+        """Lazy load lightweight whisper base model for language detection only."""
+        if self._lang_model is None:
+            import whisper
+            device = self.config.device
+            print(f"Loading whisper-base for language detection on {device}")
+            self._lang_model = whisper.load_model("base", device=device)
+        return self._lang_model
+    
+    def unload_model(self):
+        """Unload models and free GPU memory."""
+        device = self.config.device
+        if self._pipe is not None:
+            del self._pipe
+            self._pipe = None
+        if self._lang_model is not None:
+            del self._lang_model
+            self._lang_model = None
+        if device.startswith("cuda"):
+            clear_gpu_memory(device)
+        print(f"Whisper models unloaded, GPU memory freed on {device}")
+    
+    def detect_language(self, audio: np.ndarray, sample_rate: int) -> tuple:
+        """
+        Detect spoken language from audio using whisper-base language detection.
+        Uses first 30s of audio. Works even in skip-transcription mode.
+        
+        Returns:
+            Tuple of (language_code, confidence, language_profile)
+            language_profile: 'native_english', 'non_native_english', or 'sea_english'
+        """
+        import whisper
+        
+        if sample_rate != 16000:
+            import librosa
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+        
+        # Use first 30s for detection (Whisper's mel window)
+        audio_30s = audio[:16000 * 30]
+        
+        # Pad to 30s if shorter
+        if len(audio_30s) < 16000 * 30:
+            audio_30s = np.pad(audio_30s, (0, 16000 * 30 - len(audio_30s)))
+        
+        lang_model = self._get_lang_model()
+        mel = whisper.log_mel_spectrogram(audio_30s).to(lang_model.device)
+        _, probs = lang_model.detect_language(mel)
+        
+        detected_lang = max(probs, key=probs.get)
+        confidence = float(probs[detected_lang])
+        
+        # SEA languages: Indonesian, Malay, Chinese, Tamil, Tagalog, Thai, Vietnamese, Javanese
+        sea_languages = {'id', 'ms', 'zh', 'ta', 'tl', 'th', 'vi', 'jw', 'su'}
+        
+        # Determine language profile
+        if detected_lang == 'en' and confidence > 0.85:
+            language_profile = 'native_english'
+        elif detected_lang == 'en':
+            language_profile = 'non_native_english'
+        elif detected_lang in sea_languages:
+            language_profile = 'sea_english'
+        else:
+            language_profile = 'non_native_english'
+        
+        return detected_lang, confidence, language_profile
+
     def transcribe(
         self, 
         audio: np.ndarray, 
@@ -53,7 +142,7 @@ class WhisperTranscriber:
         duration: float
     ) -> TranscriptionResult:
         """
-        Transcribe audio to text.
+        Transcribe audio to text using distil-whisper.
         
         Args:
             audio: Audio waveform as numpy array
@@ -67,16 +156,32 @@ class WhisperTranscriber:
             import librosa
             audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
         
-        result = self.model.transcribe(
-            audio,
-            language=self.config.language,
-            word_timestamps=True,
-            verbose=False
+        # distil-whisper via transformers pipeline
+        generate_kwargs = {}
+        if self.config.language:
+            generate_kwargs["language"] = self.config.language
+        
+        result = self.model(
+            {"raw": audio, "sampling_rate": 16000},
+            return_timestamps=True,
+            generate_kwargs=generate_kwargs,
         )
         
-        text = result["text"].strip()
-        segments = self._process_segments(result.get("segments", []))
-        language = result.get("language", "unknown")
+        text = result.get("text", "").strip()
+        
+        # Process chunks into segments
+        chunks = result.get("chunks", [])
+        segments = []
+        for chunk in chunks:
+            ts = chunk.get("timestamp", (0, 0))
+            segments.append({
+                "start": ts[0] if ts[0] is not None else 0,
+                "end": ts[1] if ts[1] is not None else 0,
+                "text": chunk.get("text", "").strip(),
+                "words": [],
+            })
+        
+        language = "en"  # distil-whisper is English-only
         
         word_count = len(text.split())
         filler_counts = self._count_filler_words(text)
@@ -92,18 +197,6 @@ class WhisperTranscriber:
             filler_words=filler_counts,
             filler_word_rate=round(filler_rate, 2)
         )
-    
-    def _process_segments(self, segments: List[Dict]) -> List[Dict[str, Any]]:
-        """Process and clean up segments."""
-        processed = []
-        for seg in segments:
-            processed.append({
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 0),
-                "text": seg.get("text", "").strip(),
-                "words": seg.get("words", [])
-            })
-        return processed
     
     def _count_filler_words(self, text: str) -> Dict[str, int]:
         """Count filler words in the transcript."""

@@ -40,12 +40,21 @@ class ProsodyExtractor:
         pauses, pause_duration_mean, pause_duration_std, long_pauses_count = self._detect_pauses(audio, sample_rate)
         pauses_per_minute = (len(pauses) / duration) * 60 if duration > 0 else 0
         
-        speaking_rate = (word_count / duration) * 60 if duration > 0 else 0
+        # Speaking rate from word count (if available)
+        speaking_rate = (word_count / duration) * 60 if duration > 0 and word_count > 0 else 0
         
+        # Fallback: estimate from syllables when word_count unavailable
         syllable_count = self._estimate_syllables(audio, sample_rate)
         total_pause_time = sum(end - start for start, end in pauses) if pauses else 0.0
         speech_time = duration - total_pause_time
         articulation_rate = syllable_count / speech_time if speech_time > 0 else 0
+        
+        # If no word count, estimate speaking rate from syllables
+        # Typical: 1 word ≈ 1.5 syllables, so syllables/1.5 = approx words
+        if speaking_rate == 0 and articulation_rate > 0:
+            # Convert syllables/sec to words/min: (syl/sec) * 60 / 1.5
+            speaking_rate = (articulation_rate * 60) / 1.5
+        
         speech_to_silence_ratio = speech_time / total_pause_time if total_pause_time > 0 else 99.0
         
         rhythm_regularity = self._compute_rhythm_regularity(audio, sample_rate)

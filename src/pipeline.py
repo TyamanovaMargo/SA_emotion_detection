@@ -75,7 +75,7 @@ class HRAssessmentPipeline:
     @property
     def assessor(self) -> GroqHRAssessor:
         if self._assessor is None:
-            self._assessor = GroqHRAssessor(self.config.groq)
+            self._assessor = GroqHRAssessor(self.config.groq, self.config.motivation)
         return self._assessor
     
     def process(
@@ -117,6 +117,17 @@ class HRAssessmentPipeline:
             audio, sample_rate = self._load_audio(audio_path)
             duration = len(audio) / sample_rate
             
+            # Detect language/accent (works even in skip-transcription mode)
+            progress.update(task, description="Detecting language...")
+            try:
+                detected_lang, lang_confidence, language_profile = self.transcriber.detect_language(audio, sample_rate)
+                console.print(f"  [dim]Language: {detected_lang} (conf={lang_confidence:.2f}), profile: {language_profile}[/dim]")
+            except Exception as e:
+                console.print(f"  [dim]Language detection failed: {e}, defaulting to non_native_english[/dim]")
+                detected_lang = "unknown"
+                lang_confidence = 0.0
+                language_profile = "non_native_english"
+            
             if transcript_text:
                 from .models.schemas import TranscriptionResult
                 transcription = TranscriptionResult(
@@ -150,6 +161,15 @@ class HRAssessmentPipeline:
                 audio, sample_rate, transcription.word_count, duration
             )
             
+            # Free Whisper GPU memory before loading emotion model
+            if self._transcriber is not None:
+                whisper_dev = self.config.whisper.device
+                emotion_dev = self.config.emotion.device
+                # Always unload to free memory, especially if sharing GPU
+                if whisper_dev.startswith("cuda"):
+                    console.print(f"  [dim]Unloading Whisper from {whisper_dev} to free GPU memory[/dim]")
+                    self._transcriber.unload_model()
+            
             progress.update(task, description="Detecting emotions...")
             emotions = self.emotion_detector.detect(audio, sample_rate, duration)
             
@@ -171,6 +191,9 @@ class HRAssessmentPipeline:
                 prosody=prosody,
                 acoustic_features=egemaps,
                 wavlm_embedding_summary=embedding_summary,
+                detected_language=detected_lang,
+                language_confidence=round(lang_confidence, 3),
+                language_profile=language_profile,
             )
             
             progress.update(task, description="Running HR assessment with Groq LLM...")
@@ -180,6 +203,7 @@ class HRAssessmentPipeline:
                 audio_duration=duration,
                 candidate_id=candidate_id,
                 position=position,
+                language_profile=language_profile,
             )
             
             result = self.assessor.assess(assessment_input)

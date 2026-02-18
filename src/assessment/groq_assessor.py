@@ -16,14 +16,20 @@ from ..models.schemas import (
     EngagementAssessment,
 )
 from .prompt_templates import HR_ASSESSMENT_PROMPT, STRUCTURED_OUTPUT_PROMPT
+from .motivation_scorer import MotivationScorer
 
 
 class GroqHRAssessor:
     """Perform HR personality and motivation assessment using Groq."""
     
-    def __init__(self, config: Optional[GroqConfig] = None):
+    def __init__(self, config: Optional[GroqConfig] = None, motivation_config = None):
         self.config = config or GroqConfig()
         self._client = None
+        
+        # Initialize MotivationScorer with language profile
+        from ..config import MotivationConfig
+        mot_config = motivation_config or MotivationConfig()
+        self.motivation_scorer = MotivationScorer(language_profile=mot_config.language_profile)
     
     @property
     def client(self) -> Groq:
@@ -62,7 +68,7 @@ class GroqHRAssessor:
         
         structured_response = self._get_structured_output(raw_response)
         
-        result = self._parse_response(structured_response, raw_response)
+        result = self._parse_response(structured_response, raw_response, input_data)
         result.candidate_id = input_data.candidate_id
         result.position = input_data.position
         result.voice_features = input_data.voice_features
@@ -73,6 +79,7 @@ class GroqHRAssessor:
         """Build the assessment prompt from input data."""
         voice = input_data.voice_features
         prosody = voice.prosody
+        language_profile = input_data.language_profile
 
         # Position context
         if input_data.position:
@@ -89,8 +96,45 @@ class GroqHRAssessor:
         else:
             transcript_section = "TRANSCRIPT: [Not available — voice-only assessment]"
 
-        # Build compact voice data JSON with ALL features
+        # Filter emotion timeline: remove "undetected" entries
+        total_segments = 0
+        valid_segments = 0
+        mean_confidence = 0.0
+        mean_valence = 0.0
+        mean_arousal = 0.0
+        emotion_distribution = {}
+        if voice.emotions.emotion_timeline:
+            total_segments = len(voice.emotions.emotion_timeline)
+            filtered = [
+                entry for entry in voice.emotions.emotion_timeline
+                if entry.get("emotion") != "undetected"
+            ]
+            valid_segments = len(filtered)
+            if filtered:
+                mean_confidence = sum(e.get("confidence", 0) for e in filtered) / len(filtered)
+                mean_valence = sum(e.get("valence", 0) for e in filtered) / len(filtered)
+                mean_arousal = sum(e.get("arousal", 0) for e in filtered) / len(filtered)
+                for e in filtered:
+                    emo = e.get("emotion", "neutral")
+                    emotion_distribution[emo] = emotion_distribution.get(emo, 0) + 1
+        
+        valid_emotion_segments = f"{valid_segments}/{total_segments}" if total_segments > 0 else "0/0"
+        valid_ratio = valid_segments / total_segments if total_segments > 0 else 0.0
+        
+        # Language context for LLM
+        lang_context = {
+            "native_english": "Native English speaker — use standard voice thresholds.",
+            "non_native_english": "Non-native English speaker — slower pace and more pauses are normal cognitive load, NOT low motivation. Reduce emotion weight.",
+            "sea_english": "Southeast Asian English speaker — significantly slower pace, more pauses, and lower energy are culturally normal. Emotion model is unreliable for this accent. Rely primarily on prosody dynamics (energy changes, pitch variance, rhythm) for motivation.",
+        }.get(language_profile, "Non-native English speaker.")
+        
         compact_data = {
+            "language": {
+                "detected_language": voice.detected_language,
+                "language_confidence": voice.language_confidence,
+                "language_profile": language_profile,
+                "note": lang_context,
+            },
             "prosody": {
                 "speaking_rate_wpm": prosody.speaking_rate_wpm,
                 "articulation_rate": prosody.articulation_rate,
@@ -110,9 +154,21 @@ class GroqHRAssessor:
                 "rhythm_regularity": prosody.rhythm_regularity,
             },
             "emotion": {
+                "emotion_backend": "MERaLiON-SER-v1" if hasattr(self, '_emotion_backend') else "auto",
                 "primary_emotion": voice.emotions.primary_emotion,
                 "confidence": voice.emotions.confidence,
                 "emotion_scores": voice.emotions.emotion_scores,
+                "valid_emotion_segments": valid_emotion_segments,
+                "emotion_distribution": emotion_distribution,
+                "emotion_reliability": {
+                    "valid_ratio": round(valid_ratio, 2),
+                    "mean_confidence": round(mean_confidence, 3),
+                },
+                "valence_arousal": {
+                    "mean_valence": round(mean_valence, 3),
+                    "mean_arousal": round(mean_arousal, 3),
+                    "note": "Derived from emotion labels: valence [-1,+1] (negative→positive), arousal [-1,+1] (calm→excited)"
+                },
             },
             "voice_quality": voice.acoustic_features.voice_quality,
             "acoustic_summary": voice.acoustic_features.summary,
@@ -148,7 +204,8 @@ class GroqHRAssessor:
     def _parse_response(
         self, 
         structured_response: str, 
-        raw_response: str
+        raw_response: str,
+        input_data: HRAssessmentInput
     ) -> HRAssessmentResult:
         """Parse Groq's response into structured result."""
         try:
@@ -158,7 +215,7 @@ class GroqHRAssessor:
             else:
                 raise ValueError("No JSON found in response")
             
-            return self._build_result_from_json(data, raw_response)
+            return self._build_result_from_json(data, raw_response, input_data)
             
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             print(f"Warning: Could not parse structured response: {e}")
@@ -167,7 +224,8 @@ class GroqHRAssessor:
     def _build_result_from_json(
         self, 
         data: dict, 
-        raw_response: str
+        raw_response: str,
+        input_data: HRAssessmentInput
     ) -> HRAssessmentResult:
         """Build HRAssessmentResult from parsed JSON."""
         big_five_data = data.get("big_five", {})
@@ -179,46 +237,31 @@ class GroqHRAssessor:
             neuroticism=BigFiveScore(**big_five_data.get("neuroticism", {"score": 50, "confidence": 50, "reason": "Unable to assess"})),
         )
         
-        motivation_data = data.get("motivation", {})
-        
-        # Fallback: compute motivation_score if not provided by LLM
-        if "motivation_score" not in motivation_data:
-            motivation_level = motivation_data.get("overall_level", "Medium")
-            motivation_score = {"High": 75, "Medium": 50, "Low": 25}.get(motivation_level, 50)
-        else:
-            motivation_score = motivation_data["motivation_score"]
-        
-        motivation = MotivationAssessment(
-            overall_level=motivation_data.get("overall_level", "Medium"),
-            motivation_score=motivation_score,
-            pattern=motivation_data.get("pattern", "Unable to determine pattern"),
-            voice_indicators=motivation_data.get("voice_indicators", []),
-            content_indicators=motivation_data.get("content_indicators", []),
+        # Use deterministic MotivationScorer with per-file language profile
+        file_language_profile = input_data.language_profile
+        scorer = MotivationScorer(language_profile=file_language_profile)
+        motivation_result = scorer.compute_motivation_score(
+            voice_features=input_data.voice_features,
+            extraversion_score=big_five.extraversion.score
         )
         
-        # Fallback: compute engagement if not provided by LLM
-        engagement_data = data.get("engagement", {})
-        if not engagement_data:
-            extraversion_score = big_five.extraversion.score
-            engagement_score = int(0.6 * motivation_score + 0.4 * extraversion_score)
-            engagement_level = "High" if engagement_score >= 70 else "Medium" if engagement_score >= 40 else "Low"
-            engagement = EngagementAssessment(
-                overall_level=engagement_level,
-                engagement_score=engagement_score,
-                reason=f"Derived from motivation ({motivation_score}) and extraversion ({extraversion_score})"
-            )
-        else:
-            if "engagement_score" not in engagement_data:
-                engagement_level = engagement_data.get("overall_level", "Medium")
-                engagement_score = {"High": 75, "Medium": 50, "Low": 25}.get(engagement_level, 50)
-            else:
-                engagement_score = engagement_data["engagement_score"]
-            
-            engagement = EngagementAssessment(
-                overall_level=engagement_data.get("overall_level", "Medium"),
-                engagement_score=engagement_score,
-                reason=engagement_data.get("reason", "Based on voice analysis")
-            )
+        motivation = MotivationAssessment(
+            overall_level=motivation_result['motivation_level'],
+            motivation_score=motivation_result['motivation_score'],
+            pattern=motivation_result['pattern'],
+            voice_indicators=motivation_result['voice_indicators'],
+            content_indicators=data.get("motivation", {}).get("content_indicators", []),
+        )
+        
+        # Use deterministic engagement score
+        engagement_score = motivation_result['engagement_score']
+        engagement_level = "High" if engagement_score >= 70 else "Medium" if engagement_score >= 40 else "Low"
+        
+        engagement = EngagementAssessment(
+            overall_level=engagement_level,
+            engagement_score=engagement_score,
+            reason=f"Computed from voice features: motivation ({motivation_result['motivation_score']}) and extraversion ({big_five.extraversion.score})"
+        )
         
         return HRAssessmentResult(
             big_five=big_five,

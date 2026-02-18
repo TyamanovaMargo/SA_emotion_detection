@@ -5,8 +5,9 @@ audioread>=3.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 
-# Speech-to-text
+# Speech-to-text (distil-whisper via transformers + whisper-base for language detection)
 openai-whisper>=20231117
+accelerate>=0.25.0
 
 # Machine learning & embeddings
 torch>=2.0.0

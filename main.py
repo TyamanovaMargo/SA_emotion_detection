@@ -28,6 +28,13 @@ from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
 from src.models.schemas import HRAssessmentResult
 from src.utils.reporting import generate_html_report
+from src.utils.comparison_report import (
+    extract_person_name,
+    analyze_person,
+    generate_comparison_html,
+    generate_comparison_json,
+)
+from src.utils.person_report import generate_person_aggregated_json
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
@@ -372,6 +379,11 @@ Examples:
         help="Group results by immediate parent folder (useful for per-person analysis)",
     )
     parser.add_argument(
+        "--group-by-person",
+        action="store_true",
+        help="Group results by person name extracted from filename (Name_Name_audio_N.ext)",
+    )
+    parser.add_argument(
         "--auto-transcript",
         action="store_true",
         default=True,
@@ -452,6 +464,7 @@ Examples:
 
     all_results: List[Tuple[Path, HRAssessmentResult]] = []
     grouped_results: Dict[str, List[HRAssessmentResult]] = {}
+    person_results: Dict[str, List[Tuple[Path, HRAssessmentResult]]] = {}
     errors: List[Tuple[Path, str]] = []
 
     for i, audio_path in enumerate(audio_files, 1):
@@ -486,6 +499,10 @@ Examples:
                 group = audio_path.parent.name
                 grouped_results.setdefault(group, []).append(result)
 
+            # Always group by person for aggregated JSON generation
+            person = extract_person_name(audio_path.name)
+            person_results.setdefault(person, []).append((audio_path, result))
+
         except Exception as e:
             elapsed_time = time.time() - start_time
             console.print(f"  [red]✗ Failed after {elapsed_time:.2f}s - Error:[/red] {e}")
@@ -498,6 +515,30 @@ Examples:
     # Generate per-group summaries
     if args.group_by_folder and grouped_results:
         generate_summary(grouped_results, args.output_dir)
+
+    # Always generate aggregated JSON per person (all recordings in one file)
+    if person_results:
+        console.print("\n[bold cyan]Generating aggregated JSON per person...[/bold cyan]")
+        generate_person_aggregated_json(person_results, args.output_dir)
+        console.print(f"[green]Aggregated JSONs saved to:[/green] {args.output_dir}")
+    
+    # Generate per-person comparison report (only if flag is set)
+    if args.group_by_person and person_results:
+        console.print("\n[bold cyan]Generating cross-recording comparison report...[/bold cyan]")
+        person_analyses = {}
+        for person_name, results_list in person_results.items():
+            person_analyses[person_name] = analyze_person(person_name, results_list)
+            console.print(f"  {person_name}: {len(results_list)} recordings, consistency={person_analyses[person_name]['overall_consistency']}")
+
+        # Save JSON
+        json_path = args.output_dir / "comparison_report.json"
+        generate_comparison_json(person_analyses, json_path)
+        console.print(f"[green]Comparison JSON:[/green] {json_path}")
+
+        # Save HTML
+        html_path = args.output_dir / "comparison_report.html"
+        generate_comparison_html(person_analyses, html_path)
+        console.print(f"[green]Comparison HTML:[/green] {html_path}")
 
     # Print errors
     if errors:
