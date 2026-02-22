@@ -2,12 +2,14 @@
 
 from .transcription import WhisperTranscriber
 from .prosody import ProsodyExtractor
-from .emotion import EmotionDetector
+from .emotion_meralion import EmotionDetector
 from .egemaps import EgemapsExtractor
+from .voice_analyzer import VoiceAnalyzer
 
 __all__ = [
     "WhisperTranscriber",
     "ProsodyExtractor",
     "EmotionDetector",
     "EgemapsExtractor",
+    "VoiceAnalyzer",
 ]

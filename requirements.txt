@@ -13,9 +13,7 @@ accelerate>=0.25.0
 torch>=2.0.0
 torchaudio>=2.0.0
 transformers>=4.35.0
-
-# Emotion detection
-funasr>=1.0.0
+peft>=0.18.0
 
 # Acoustic features (eGeMAPS)
 opensmile>=2.5.0
@@ -32,8 +30,8 @@ tqdm>=4.66.0
 # Voice quality features (jitter, shimmer, HNR)
 praat-parselmouth>=0.4.3
 
-# MERaLiON-SER dependencies
-peft>=0.7.0
+# Visualization
+matplotlib>=3.7.0
 
 # Dashboard
 streamlit>=1.30.0

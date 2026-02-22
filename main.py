@@ -28,6 +28,14 @@ from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
 from src.models.schemas import HRAssessmentResult
 from src.utils.reporting import generate_html_report
+from src.utils.scoring import (
+    score_to_label,
+    wpm_label,
+    validate_strengths_and_dev_areas,
+    compute_final_assessment,
+    generate_hr_summary_from_scores,
+    compute_content_voice_alignment,
+)
 from src.utils.comparison_report import (
     extract_person_name,
     analyze_person,
@@ -131,6 +139,53 @@ def load_transcript(path: Path) -> str:
 # Processing helpers
 # ---------------------------------------------------------------------------
 
+def _enrich_content_indicators(
+    llm_indicators: list,
+    content_voice: dict,
+) -> list:
+    """Enrich LLM content_indicators with transcript-derived metrics (#18)."""
+    enriched = list(llm_indicators) if llm_indicators else []
+    if not content_voice or not content_voice.get("available"):
+        return enriched
+
+    li = content_voice.get("linguistic_indicators", {})
+    hedge = li.get("hedge_word_count", 0)
+    self_ref = li.get("self_reference_count", 0)
+    assertion_ratio = li.get("assertion_ratio", 1.0)
+    pos = li.get("positive_word_count", 0)
+    neg = li.get("negative_word_count", 0)
+
+    if hedge > 3:
+        enriched.append(f"frequent hedging language ({hedge} hedge words)")
+    elif hedge == 0:
+        enriched.append("no hedging language (direct/assertive)")
+    if self_ref > 10:
+        enriched.append(f"high self-reference ({self_ref} instances — strong personal engagement)")
+    if assertion_ratio < 0.95:
+        enriched.append(f"assertion ratio: {assertion_ratio:.2f} (lower = more tentative)")
+    if pos > neg + 3:
+        enriched.append(f"positive lexicon dominant ({pos} pos vs {neg} neg words)")
+    elif neg > pos + 3:
+        enriched.append(f"negative lexicon dominant ({neg} neg vs {pos} pos words)")
+
+    if content_voice.get("content_voice_mismatch"):
+        enriched.append("content-voice mismatch: text sentiment diverges from vocal tone")
+
+    return enriched
+
+
+def _parse_score_range(sr: str) -> tuple:
+    """Parse '80-90' or '80–90' string into (80, 90) ints. Returns (50, 50) on failure."""
+    if not sr or not isinstance(sr, str):
+        return (50, 50)
+    cleaned = sr.replace("–", "-").replace("—", "-")
+    parts = cleaned.split("-")
+    try:
+        return (int(parts[0].strip()), int(parts[1].strip()))
+    except (ValueError, IndexError):
+        return (50, 50)
+
+
 def process_single(
     pipeline: HRAssessmentPipeline,
     audio_path: Path,
@@ -171,72 +226,113 @@ def process_single(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         json_path = output_dir / f"{audio_path.stem}_{timestamp}_assessment.json"
 
-        # --- Build structured output ---
-        dual = result.dual_emotions or {}
-        timeline = result.emotion_timeline_rich or []
-
-        # Split dual timeline into per-model + fused timelines
-        e2v_timeline = []
-        mer_timeline = []
-        fused_timeline = []
-        comparison_segments = []
-        agree_count = 0
-        for seg in timeline:
-            base = {
-                "time_start": seg.get("time_start"),
-                "time_end": seg.get("time_end"),
-                "rms_energy": seg.get("rms_energy"),
-                "snr_db": seg.get("snr_db"),
-                "pitch_mean": seg.get("pitch_mean"),
-            }
-            e2v_timeline.append({
-                **base,
-                "emotion": seg.get("emotion2vec_emotion", "N/A"),
-                "confidence": seg.get("emotion2vec_confidence", 0),
-                "valence": seg.get("emotion2vec_valence", 0),
-                "arousal": seg.get("emotion2vec_arousal", 0),
-            })
-            mer_timeline.append({
-                **base,
-                "emotion": seg.get("meralion_emotion", "N/A"),
-                "confidence": seg.get("meralion_confidence", 0),
-                "valence": seg.get("meralion_valence", 0),
-                "arousal": seg.get("meralion_arousal", 0),
-            })
-            fused_timeline.append({
-                **base,
-                "emotion": seg.get("fused_emotion", "N/A"),
-                "confidence": seg.get("fused_confidence", 0),
-                "valence": seg.get("fused_valence", 0),
-                "arousal": seg.get("fused_arousal", 0),
-                "entropy": seg.get("entropy", 0),
-                "top2_gap": seg.get("top2_gap", 0),
-                "low_confidence": seg.get("low_confidence", False),
-            })
-            agree = seg.get("models_agree", False)
-            if agree:
-                agree_count += 1
-            comparison_segments.append({
-                "time": f"{seg.get('time_start', 0):.0f}–{seg.get('time_end', 0):.0f}s",
-                "emotion2vec": seg.get("emotion2vec_emotion", "N/A"),
-                "meralion_ser": seg.get("meralion_emotion", "N/A"),
-                "fused": seg.get("fused_emotion", "N/A"),
-                "agree": agree,
-                "low_confidence": seg.get("low_confidence", False),
-            })
-
-        agreement_rate = round(agree_count / len(timeline), 3) if timeline else None
-
-        # Voice features split
+        # --- Build structured output with all validation & post-processing ---
         vf = result.voice_features.model_dump() if result.voice_features else {}
+        va = result.voice_analysis or {}
 
-        # Big Five as clean dict
+        # Big Five as clean dict (basic LLM scores)
         b5 = {}
         for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
             score_obj = getattr(result.big_five, trait)
             b5[trait] = {"score": score_obj.score, "confidence": score_obj.confidence, "reason": score_obj.reason}
 
+        # (#2, #5) Validate strengths / development_areas — no overlap, neuroticism inverted
+        validated_strengths, validated_dev = validate_strengths_and_dev_areas(
+            b5, result.trait_strengths, result.personality_development_areas,
+        )
+
+        # (#6, #17) Final assessment: weighted average across basic, approximate, enriched
+        approx_b5_raw = None
+        if result.approximate_assessment:
+            ad = result.approximate_assessment.model_dump()
+            approx_b5_raw = ad.get("big5_approximate", {})
+        enriched_b5 = None
+        if result.llm_comparison and isinstance(result.llm_comparison, dict):
+            enriched_b5 = result.llm_comparison.get("enriched_big5", {})
+        final_assessment = compute_final_assessment(b5, approx_b5_raw, enriched_b5)
+
+        # (#7) HR summary from final scores, not LLM template
+        emo_summary = result.emotion_summary or {}
+        dominant_emo = emo_summary.get("dominant_emotion", "neutral")
+        mot_score = result.motivation.motivation_score
+        eng_score = result.engagement.engagement_score if result.engagement else None
+        hr_summary_generated = generate_hr_summary_from_scores(
+            final_assessment, mot_score, eng_score, dominant_emo,
+        )
+
+        # (#14) Language detection fallback
+        lang_detected = vf.get("detected_language", "unknown")
+        lang_confidence = vf.get("language_confidence", 0.0)
+        lang_source = "whisper"
+        if (lang_confidence or 0) < 0.3 and transcript:
+            # Fallback: assume English if transcript exists and has English words
+            common_en = {"the", "is", "and", "to", "a", "of", "in", "that", "it", "for"}
+            words_lower = set(transcript.lower().split()[:100])
+            if len(words_lower & common_en) >= 3:
+                lang_detected = "en"
+                lang_confidence = 0.5
+                lang_source = "transcript_fallback"
+
+        # (#13) Non-native speaker notes
+        lang_profile = vf.get("language_profile", "non_native_english")
+        non_native_notes = None
+        if lang_profile in ("non_native_english", "sea_english"):
+            non_native_notes = {
+                "jitter_shimmer_note": "Elevated jitter/shimmer may reflect L2 articulatory effort, not emotional instability",
+                "pause_note": "Higher pause frequency is expected for non-native speakers (cognitive load)",
+                "wpm_thresholds_adjusted": True,
+            }
+
+        # (#15) Content-voice alignment
+        valence_mean = emo_summary.get("valence_mean", 0.0)
+        content_voice = compute_content_voice_alignment(transcript, valence_mean)
+
+        # (#20) Convert approximate_assessment score_range to numeric
+        approx_dump = None
+        if result.approximate_assessment:
+            approx_dump = result.approximate_assessment.model_dump()
+            for section_key in ("big5_approximate", "motivation_approximate", "engagement_approximate"):
+                section = approx_dump.get(section_key, {})
+                if isinstance(section, dict) and "score_range" not in section:
+                    # big5_approximate is a dict of traits
+                    for trait_key, trait_val in section.items():
+                        if isinstance(trait_val, dict) and "score_range" in trait_val:
+                            sr = trait_val["score_range"]
+                            lo, hi = _parse_score_range(sr)
+                            trait_val["score_low"] = lo
+                            trait_val["score_high"] = hi
+                elif isinstance(section, dict) and "score_range" in section:
+                    sr = section["score_range"]
+                    lo, hi = _parse_score_range(sr)
+                    section["score_low"] = lo
+                    section["score_high"] = hi
+
+        # (#19) Pipeline metadata
+        audio_dur = va.get("prosody", {}).get("f0_mean", 0)  # duration from result
+        processing_metadata = {
+            "pipeline_version": "2.0.0",
+            "processing_date": datetime.now().isoformat(),
+            "modules_used": [
+                "whisper_transcription",
+                "prosody_extraction_v2",
+                "emotion_meralion_ser_v1",
+                "egemaps_v02",
+                "groq_llm_assessment",
+                "voice_analysis_unified",
+            ],
+            "language_profile": lang_profile,
+            "warnings": [],
+        }
+        # Add calibration warnings to metadata
+        for w in final_assessment.get("calibration_warnings", []):
+            processing_metadata["warnings"].append(
+                f"High cross-module variance for {w['trait']}: spread={w['spread']}"
+            )
+
         report = {
+            # ── 0. Pipeline metadata (#19) ──
+            "pipeline_metadata": processing_metadata,
+
             # ── 1. Candidate info ──
             "candidate": {
                 "id": result.candidate_id,
@@ -249,55 +345,54 @@ def process_single(
             # ── 2. Transcript ──
             "transcript": transcript or None,
 
-            # ── 3. Voice analysis ──
+            # ── 3. Unified voice analysis ──
             "voice_analysis": {
+                "prosody": va.get("prosody"),
+                "voice_quality": va.get("voice_quality"),
+                "spectral": va.get("spectral"),
+                "emotion_timeline": va.get("emotion_timeline"),
+                "emotion_aggregates": va.get("emotion_aggregates"),
+                "paralinguistic_summary": va.get("paralinguistic_summary"),
+            },
+
+            # ── 4. Legacy voice features ──
+            "legacy_voice_features": {
                 "prosody": vf.get("prosody"),
                 "acoustic_features": vf.get("acoustic_features"),
                 "embedding_summary": vf.get("wavlm_embedding_summary"),
                 "language": {
-                    "detected": vf.get("detected_language"),
-                    "confidence": vf.get("language_confidence"),
-                    "profile": vf.get("language_profile"),
+                    "detected": lang_detected,
+                    "confidence": lang_confidence,
+                    "profile": lang_profile,
+                    "source": lang_source,
                 },
+                "non_native_notes": non_native_notes,
                 "granular_features": result.granular_voice_features,
             },
 
-            # ── 4. Emotion analysis — two models + fused ──
-            "emotion_analysis": {
-                "emotion2vec": {
-                    "overall": dual.get("emotion2vec"),
-                    "timeline": e2v_timeline,
-                },
-                "meralion_ser": {
-                    "overall": dual.get("meralion_ser"),
-                    "timeline": mer_timeline,
-                },
-                "fused": {
-                    "overall": dual.get("fused"),
-                    "timeline": fused_timeline,
-                },
-                "comparison": {
-                    "overall_agree": dual.get("models_agree"),
-                    "segment_agreement_rate": agreement_rate,
-                    "segments": comparison_segments,
-                },
-            },
+            # ── 5. Emotion summary ──
+            "emotion_summary": emo_summary,
 
-            # ── 5. Personality assessment (LLM) ──
+            # ── 6. Personality assessment (LLM basic) ──
             "personality_assessment": {
                 "big_five": b5,
-                "strengths": result.trait_strengths,
-                "development_areas": result.personality_development_areas,
+                "strengths": validated_strengths,
+                "development_areas": validated_dev,
             },
 
-            # ── 6. Motivation & engagement (LLM) ──
+            # ── 6b. Final assessment (#6, #9, #17) — weighted average ──
+            "final_assessment": final_assessment,
+
+            # ── 7. Motivation & engagement (#18: enriched content_indicators) ──
             "motivation_engagement": {
                 "motivation": {
                     "level": result.motivation.overall_level,
                     "score": result.motivation.motivation_score,
                     "pattern": result.motivation.pattern,
                     "voice_indicators": result.motivation.voice_indicators,
-                    "content_indicators": result.motivation.content_indicators,
+                    "content_indicators": _enrich_content_indicators(
+                        result.motivation.content_indicators, content_voice,
+                    ),
                 },
                 "engagement": {
                     "level": result.engagement.overall_level,
@@ -308,20 +403,17 @@ def process_single(
                 "development_areas": result.motivation_development_areas,
             },
 
-            # ── 7. Approximate voice-only assessment ──
-            "approximate_assessment": (
-                result.approximate_assessment.model_dump()
-                if result.approximate_assessment else None
-            ),
-
-            # ── 8. Emotion summary (fused, for LLM) ──
-            "emotion_summary": result.emotion_summary,
+            # ── 8. Approximate voice-only assessment (#20: numeric score_range) ──
+            "approximate_assessment": approx_dump,
 
             # ── 9. LLM ablation: baseline vs enriched ──
             "llm_comparison": result.llm_comparison,
 
-            # ── 10. HR summary ──
-            "hr_summary": result.hr_summary,
+            # ── 10. Content-voice alignment (#15) ──
+            "content_voice_alignment": content_voice,
+
+            # ── 11. HR summary (#7: from final scores) ──
+            "hr_summary": hr_summary_generated,
         }
 
         with open(json_path, "w", encoding="utf-8") as f:

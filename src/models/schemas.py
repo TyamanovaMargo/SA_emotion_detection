@@ -172,3 +172,4 @@ class HRAssessmentResult(BaseModel):
     dual_emotions: Optional[Dict[str, Any]] = Field(default=None, description="Side-by-side emotion results from MERaLiON-SER and emotion2vec")
     emotion_summary: Optional[Dict[str, Any]] = Field(default=None, description="Aggregated emotion stats: volatility, valence/arousal trends, agreement rate")
     llm_comparison: Optional[Dict[str, Any]] = Field(default=None, description="Ablation: baseline vs enriched LLM assessment with deltas")
+    voice_analysis: Optional[Dict[str, Any]] = Field(default=None, description="Unified voice analysis: prosody, voice_quality, spectral, emotion_timeline, emotion_aggregates, paralinguistic_summary")

@@ -24,18 +24,10 @@ class WhisperConfig(BaseModel):
 
 
 class EmotionConfig(BaseModel):
-    """Emotion detection configuration."""
-    backend: str = Field(
-        default_factory=lambda: os.getenv("EMOTION_BACKEND", "meralion"),
-        description="Emotion backend: 'meralion' (MERaLiON-SER-v1) or 'emotion2vec'"
-    )
-    model_name: str = Field(
-        default="iic/emotion2vec_plus_base",
-        description="Emotion2vec model name (used when backend=emotion2vec)"
-    )
+    """Emotion detection configuration (MERaLiON-SER-v1 only)."""
     meralion_model: str = Field(
         default="MERaLiON/MERaLiON-SER-v1",
-        description="MERaLiON SER model name (used when backend=meralion)"
+        description="MERaLiON SER model name from HuggingFace"
     )
     device: str = Field(
         default_factory=lambda: os.getenv("EMOTION_DEVICE", "auto"),

@@ -117,7 +117,9 @@ class MotivationScorer:
         score += pace_score
         components['pace'] = pace_score
         if pace_score != 0:
-            indicators.append(f"speaking_rate_wpm={prosody.speaking_rate_wpm:.1f} ({'fast' if pace_score > 0 else 'slow'})")
+            from ..utils.scoring import wpm_label
+            rate_label = wpm_label(prosody.speaking_rate_wpm, self.language_profile)
+            indicators.append(f"speaking_rate_wpm={prosody.speaking_rate_wpm:.1f} ({rate_label})")
         
         # Pauses component (10%)
         pause_score = self._score_pauses(prosody)

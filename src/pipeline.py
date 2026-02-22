@@ -20,8 +20,16 @@ from .extractors import (
     ProsodyExtractor,
     EmotionDetector,
     EgemapsExtractor,
+    VoiceAnalyzer,
 )
 from .assessment import GroqHRAssessor
+from .utils.scoring import (
+    dominant_emotion_with_tiebreaker,
+    compute_slope_and_trend,
+    compute_final_emotion_arc,
+    compute_emotion_stability_10s,
+    adjusted_emotional_shifts,
+)
 
 
 console = Console()
@@ -46,6 +54,7 @@ class HRAssessmentPipeline:
         self._prosody_extractor: Optional[ProsodyExtractor] = None
         self._emotion_detector: Optional[EmotionDetector] = None
         self._egemaps_extractor: Optional[EgemapsExtractor] = None
+        self._voice_analyzer: Optional[VoiceAnalyzer] = None
         self._assessor: Optional[GroqHRAssessor] = None
     
     @property
@@ -72,6 +81,18 @@ class HRAssessmentPipeline:
             self._egemaps_extractor = EgemapsExtractor(self.config.egemaps)
         return self._egemaps_extractor
     
+    @property
+    def voice_analyzer(self) -> VoiceAnalyzer:
+        if self._voice_analyzer is None:
+            self._voice_analyzer = VoiceAnalyzer(
+                emotion_config=self.config.emotion,
+                prosody_config=self.config.prosody,
+                segment_duration=5.0,
+                segment_step=2.0,
+                emotion_detector=self.emotion_detector,
+            )
+        return self._voice_analyzer
+
     @property
     def assessor(self) -> GroqHRAssessor:
         if self._assessor is None:
@@ -202,20 +223,35 @@ class HRAssessmentPipeline:
                 audio, sample_rate, transcription.word_count, duration
             )
 
-            # Dual-model emotion comparison (MERaLiON-SER + emotion2vec)
-            progress.update(task, description="Running dual-model emotion comparison...")
-            dual_emotions = self.emotion_detector.detect_dual(audio, sample_rate, duration)
-
-            # Build rich emotion timeline with fusion, SNR, smoothing
-            progress.update(task, description="Building fused emotion timeline...")
-            emotion_timeline_rich = self.emotion_detector.detect_emotion_timeline_dual(
-                audio, sample_rate, segment_duration=8.0, hop_duration=4.0,
+            # --- Unified Voice Analysis (MERaLiON-SER: overlapping 5s segments + VAD + emotion dynamics) ---
+            progress.update(task, description="Running unified voice analysis (MERaLiON-SER emotion dynamics)...")
+            voice_analysis = self.voice_analyzer.analyze(
+                audio, sample_rate, word_count=transcription.word_count,
             )
 
-            # Compute emotion summary for LLM
-            progress.update(task, description="Computing emotion summary...")
-            from .extractors.emotion_fusion import compute_emotion_summary
-            emotion_summary = compute_emotion_summary(emotion_timeline_rich)
+            # Generate emotion timeline visualization
+            progress.update(task, description="Generating emotion visualization...")
+            try:
+                from .utils.emotion_visualizer import plot_emotion_timeline, plot_emotion_summary
+                vis_dir = self.config.output_dir / "visualizations"
+                vis_dir.mkdir(parents=True, exist_ok=True)
+                plot_name = audio_path.stem
+                plot_emotion_timeline(
+                    voice_analysis["emotion_timeline"],
+                    output_path=str(vis_dir / f"{plot_name}_emotion_timeline.png"),
+                    title=f"Emotion Dynamics: {audio_path.stem}",
+                )
+                plot_emotion_summary(
+                    voice_analysis["emotion_aggregates"],
+                    output_path=str(vis_dir / f"{plot_name}_emotion_summary.png"),
+                    title=f"Emotion Summary: {audio_path.stem}",
+                )
+            except Exception as e:
+                console.print(f"  [dim]Visualization skipped: {e}[/dim]")
+
+            # Build emotion summary from unified timeline for LLM
+            progress.update(task, description="Computing emotion summary for LLM...")
+            emotion_summary = self._build_emotion_summary_from_voice_analysis(voice_analysis)
 
             progress.update(task, description="Running HR assessment with Groq LLM...")
             assessment_input = HRAssessmentInput(
@@ -231,6 +267,7 @@ class HRAssessmentPipeline:
 
             # Get approximate assessment from granular features
             progress.update(task, description="Getting approximate voice-based assessment...")
+            emotion_timeline_rich = voice_analysis.get("emotion_timeline", [])
             approx = self.assessor.assess_approximate(granular_features, emotion_timeline_rich)
 
             # Run ablation: baseline (no emotion summary) vs enriched
@@ -243,13 +280,14 @@ class HRAssessmentPipeline:
                 print(f"  [warn] ablation failed: {e}")
                 llm_comparison = None
 
-            # Attach new data to result
+            # Attach data to result
             result.granular_voice_features = granular_features
             result.emotion_timeline_rich = emotion_timeline_rich
             result.approximate_assessment = approx
-            result.dual_emotions = dual_emotions
+            result.dual_emotions = None
             result.emotion_summary = emotion_summary
             result.llm_comparison = llm_comparison
+            result.voice_analysis = voice_analysis
             
             progress.update(task, description="Complete!")
         
@@ -258,6 +296,94 @@ class HRAssessmentPipeline:
         
         return result
     
+    def _build_emotion_summary_from_voice_analysis(self, voice_analysis: dict) -> dict:
+        """Convert unified voice_analysis into emotion_summary dict for LLM.
+        
+        Fixes applied:
+        - #3: dominant emotion tiebreaker (count → mean → recency → 'mixed')
+        - #4: slope/trend always consistent (trend derived from slope)
+        - #10: final_emotion_arc (last 15s)
+        - #11: emotion_stability_10s
+        - #12: adjusted_emotional_shifts for overlapping windows
+        """
+        agg = voice_analysis.get("emotion_aggregates", {})
+        timeline = voice_analysis.get("emotion_timeline", [])
+        dynamics = agg.get("dynamics", {})
+        vad_stats = agg.get("vad_stats", {})
+        derived = agg.get("derived", {})
+        emo_stats = agg.get("emotion_stats", {})
+
+        if not timeline:
+            return {"error": "no timeline data"}
+
+        n = len(timeline)
+
+        # Dominant emotion with tiebreaker (#3)
+        dominant = dominant_emotion_with_tiebreaker(emo_stats, timeline)
+        dominant_ratio = round(emo_stats.get(dominant, {}).get("dominant_segments", 0) / max(n, 1), 3)
+
+        # Emotion distribution
+        emotions_7 = ["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
+        emo_distribution = {e: emo_stats.get(e, {}).get("dominant_segments", 0) for e in emotions_7}
+
+        # Neutral ratio
+        neutral_ratio = round(emo_distribution.get("neutral", 0) / max(n, 1), 3)
+
+        # Volatility from dynamics
+        volatility = dynamics.get("arousal_volatility", 0.0)
+
+        # Compute actual slopes from timeline VAD data (#4)
+        valences = np.array([seg.get("vad", {}).get("valence", 0.0) for seg in timeline])
+        arousals = np.array([seg.get("vad", {}).get("arousal", 0.0) for seg in timeline])
+        val_slope, val_trend = compute_slope_and_trend(valences)
+        ar_slope, ar_trend = compute_slope_and_trend(arousals)
+
+        val_stats = vad_stats.get("valence", {})
+        ar_stats = vad_stats.get("arousal", {})
+
+        # Raw and adjusted emotional shifts (#12)
+        raw_shifts = dynamics.get("emotional_shifts", 0)
+        adj_shifts = adjusted_emotional_shifts(raw_shifts, step_size=2.0, window_size=5.0)
+
+        # Emotion stability on 10s windows (#11)
+        stability_10s = compute_emotion_stability_10s(timeline, segment_step=2.0)
+
+        # Final emotion arc — last 15s (#10)
+        final_arc = compute_final_emotion_arc(timeline, window_seconds=15.0, segment_step=2.0)
+
+        return {
+            "total_segments": n,
+            "dominant_emotion": dominant,
+            "dominant_emotion_ratio": dominant_ratio,
+            "emotion_volatility": volatility,
+            "emotion_distribution": emo_distribution,
+            "neutral_ratio": neutral_ratio,
+            "valence_mean": val_stats.get("mean", 0),
+            "valence_std": val_stats.get("std", 0),
+            "arousal_mean": ar_stats.get("mean", 0),
+            "arousal_std": ar_stats.get("std", 0),
+            "valence_trend": val_trend,
+            "valence_slope": val_slope,
+            "arousal_trend": ar_trend,
+            "arousal_slope": ar_slope,
+            "avg_confidence": derived.get("confidence_score", 0),
+            "avg_entropy": None,
+            "low_confidence_ratio": 0.0,
+            "model_agreement_rate": None,
+            "top_transition": None,
+            "stress_segments": dynamics.get("stress_segments", 0),
+            "raw_emotional_shifts": raw_shifts,
+            "adjusted_emotional_shifts": adj_shifts,
+            "emotional_shifts": raw_shifts,
+            "arc_type": dynamics.get("arc_type", "flat"),
+            "peak_arousal_time": dynamics.get("peak_arousal_time", 0),
+            "confidence_score": derived.get("confidence_score", 0),
+            "stress_index": derived.get("stress_index", 0),
+            "emotion_stability_10s": stability_10s,
+            "final_emotion_arc": final_arc,
+            "paralinguistic_summary": voice_analysis.get("paralinguistic_summary", ""),
+        }
+
     def process_transcript_only(
         self,
         transcript: str,
@@ -307,11 +433,11 @@ class HRAssessmentPipeline:
         elif prosody.energy_std < 0.01:
             parts.append("flat volume (minimal variation)")
         
-        # Pace
+        # Pace (#1: corrected thresholds — 108 WPM is slow, not fast)
         wpm = prosody.speaking_rate_wpm
-        if wpm > 170:
+        if wpm > 180:
             parts.append(f"VERY fast speech ({wpm:.0f} wpm)")
-        elif wpm > 140:
+        elif wpm > 150:
             parts.append(f"fast speech ({wpm:.0f} wpm)")
         elif wpm < 90:
             parts.append(f"VERY slow speech ({wpm:.0f} wpm)")
@@ -397,54 +523,46 @@ class HRAssessmentPipeline:
         if result.position:
             console.print(f"[bold]Position:[/bold] {result.position}")
         
-        # --- Dual-model emotion comparison ---
-        dual = result.dual_emotions
-        if dual:
-            console.print("\n[bold yellow]Emotion Detection (2 models):[/bold yellow]")
-            e2v = dual.get("emotion2vec", {})
-            mer = dual.get("meralion_ser", {})
+        # --- MERaLiON-SER Emotion Analysis ---
+        va = result.voice_analysis
+        if va and va.get("emotion_aggregates"):
+            agg = va["emotion_aggregates"]
+            dynamics = agg.get("dynamics", {})
+            derived = agg.get("derived", {})
+            vad = agg.get("vad_stats", {})
+            tl = va.get("emotion_timeline", [])
 
-            e2v_emo = e2v.get("primary_emotion", "N/A")
-            e2v_conf = e2v.get("confidence", 0)
-            mer_emo = mer.get("primary_emotion", "N/A")
-            mer_conf = mer.get("confidence", 0)
+            console.print(f"\n[bold yellow]Emotion Detection (MERaLiON-SER-v1):[/bold yellow]")
+            console.print(f"  Segments analyzed: {len(tl)}")
 
-            console.print(f"  {'emotion2vec':18} {e2v_emo:>12}  ({e2v_conf:.1%} conf)")
-            console.print(f"  {'MERaLiON-SER':18} {mer_emo:>12}  ({mer_conf:.1%} conf)")
+            # Dominant emotion from stats
+            emo_stats = agg.get("emotion_stats", {})
+            if emo_stats:
+                dominant = max(emo_stats, key=lambda e: emo_stats[e].get("dominant_segments", 0))
+                dom_segs = emo_stats[dominant].get("dominant_segments", 0)
+                console.print(f"  Dominant: {dominant} ({dom_segs}/{len(tl)} segments)")
 
-            agree = dual.get("models_agree")
-            if agree is True:
-                console.print("  [green]✓ Models AGREE[/green]")
-            elif agree is False:
-                console.print("  [yellow]⚠ Models DISAGREE[/yellow]")
-            else:
-                console.print("  [dim]One model unavailable[/dim]")
+            # VAD
+            ar = vad.get("arousal", {})
+            val = vad.get("valence", {})
+            console.print(f"  Valence:  mean={val.get('mean', 0):.2f}  std={val.get('std', 0):.2f}")
+            console.print(f"  Arousal:  mean={ar.get('mean', 0):.2f}  std={ar.get('std', 0):.2f}")
 
-            # Per-segment agreement rate
-            timeline = result.emotion_timeline_rich or []
-            if timeline:
-                n_agree = sum(1 for s in timeline if s.get("models_agree"))
-                rate = n_agree / len(timeline)
-                console.print(f"  Segment agreement: {n_agree}/{len(timeline)} ({rate:.0%})")
+            # Dynamics
+            console.print(f"  Arc: {dynamics.get('arc_type', '?')}  |  Shifts: {dynamics.get('emotional_shifts', 0)}  |  Stress peaks: {dynamics.get('stress_segments', 0)}")
+            console.print(f"  Confidence: {derived.get('confidence_score', 0):.2f}  |  Stress index: {derived.get('stress_index', 0):.2f}")
 
-            # Fused result
-            fused = dual.get("fused", {})
-            if fused:
-                f_emo = fused.get("primary_emotion", "N/A")
-                f_conf = fused.get("confidence", 0)
-                f_ent = fused.get("entropy", 0)
-                console.print(f"  {'Fused':18} {f_emo:>12}  ({f_conf:.1%} conf, entropy={f_ent:.2f})")
+            # Paralinguistic summary
+            para = va.get("paralinguistic_summary", "")
+            if para:
+                console.print(f"  [dim]{para}[/dim]")
 
-        # --- Emotion summary ---
+        # --- Emotion summary (for LLM) ---
         emo_sum = result.emotion_summary
         if emo_sum and not emo_sum.get("error"):
-            console.print("\n[bold yellow]Emotion Summary (fused):[/bold yellow]")
+            console.print("\n[bold yellow]Emotion Summary:[/bold yellow]")
             console.print(f"  Dominant: {emo_sum.get('dominant_emotion', '?')} ({emo_sum.get('dominant_emotion_ratio', 0):.0%})")
             console.print(f"  Volatility: {emo_sum.get('emotion_volatility', 0):.2f}  |  Neutral ratio: {emo_sum.get('neutral_ratio', 0):.2f}")
-            console.print(f"  Valence: mean={emo_sum.get('valence_mean', 0):.2f} std={emo_sum.get('valence_std', 0):.2f} trend={emo_sum.get('valence_trend', '?')}")
-            console.print(f"  Arousal:  mean={emo_sum.get('arousal_mean', 0):.2f} std={emo_sum.get('arousal_std', 0):.2f} trend={emo_sum.get('arousal_trend', '?')}")
-            if emo_sum.get("model_agreement_rate") is not None:
-                console.print(f"  Model agreement: {emo_sum['model_agreement_rate']:.0%}  |  Avg confidence: {emo_sum.get('avg_confidence', 0):.2f}")
 
         # --- Ablation deltas ---
         ablation = result.llm_comparison
