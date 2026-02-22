@@ -70,12 +70,16 @@ class WhisperTranscriber:
         return self._pipe
     
     def _get_lang_model(self):
-        """Lazy load lightweight whisper base model for language detection only."""
+        """Lazy load lightweight whisper base model for language detection only.
+        
+        Always loads on CPU — detect_language uses sparse tensors
+        which crash on MPS ('aten::_sparse_coo_tensor_with_dims_and_tensors').
+        Language detection is fast enough on CPU.
+        """
         if self._lang_model is None:
             import whisper
-            device = self.config.device
-            print(f"Loading whisper-base for language detection on {device}")
-            self._lang_model = whisper.load_model("base", device=device)
+            print("Loading whisper-base for language detection on cpu")
+            self._lang_model = whisper.load_model("base", device="cpu")
         return self._lang_model
     
     def unload_model(self):
@@ -124,7 +128,9 @@ class WhisperTranscriber:
         sea_languages = {'id', 'ms', 'zh', 'ta', 'tl', 'th', 'vi', 'jw', 'su'}
         
         # Determine language profile
-        if detected_lang == 'en' and confidence > 0.85:
+        # Whisper detects LANGUAGE, not ACCENT — non-native speakers with
+        # decent accents score 0.85–0.96. Only >0.97 reliably = native.
+        if detected_lang == 'en' and confidence > 0.97:
             language_profile = 'native_english'
         elif detected_lang == 'en':
             language_profile = 'non_native_english'

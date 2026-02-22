@@ -236,10 +236,10 @@ def process_single(
             score_obj = getattr(result.big_five, trait)
             b5[trait] = {"score": score_obj.score, "confidence": score_obj.confidence, "reason": score_obj.reason}
 
-        # (#2, #5) Validate strengths / development_areas — no overlap, neuroticism inverted
-        validated_strengths, validated_dev = validate_strengths_and_dev_areas(
-            b5, result.trait_strengths, result.personality_development_areas,
-        )
+        # L2 adjustments metadata (applied to FINAL scores below, not basic)
+        l2_adj = va.get("l2_adjustments")
+
+        # (#2, #5) — validated later from final_assessment scores
 
         # (#6, #17) Final assessment: weighted average across basic, approximate, enriched
         approx_b5_raw = None
@@ -251,9 +251,35 @@ def process_single(
             enriched_b5 = result.llm_comparison.get("enriched_big5", {})
         final_assessment = compute_final_assessment(b5, approx_b5_raw, enriched_b5)
 
-        # (#7) HR summary from final scores, not LLM template
+        # (B1) Apply L2 Big5 adjustments to FINAL weighted scores, not basic
+        if l2_adj:
+            b5_adj = l2_adj.get("big5_adjustments", {})
+            traits_fa = final_assessment.get("traits", {})
+            for trait_name, delta in b5_adj.items():
+                if trait_name in traits_fa and isinstance(delta, (int, float)):
+                    old = traits_fa[trait_name]["score"]
+                    traits_fa[trait_name]["score"] = max(0, min(100, old + delta))
+                    traits_fa[trait_name]["label"] = score_to_label(traits_fa[trait_name]["score"])
+                    ci = traits_fa[trait_name].get("confidence_interval", [old, old])
+                    traits_fa[trait_name]["confidence_interval"] = [
+                        max(0, ci[0] + delta), min(100, ci[1] + delta)
+                    ]
+                    traits_fa[trait_name]["l2_delta"] = delta
+
+        # (B3) Strengths/dev from final_assessment scores, not basic LLM
+        fa_b5_for_validation = {}
+        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
+            fa_b5_for_validation[trait] = {"score": final_assessment.get("traits", {}).get(trait, {}).get("score", 50)}
+        validated_strengths, validated_dev = validate_strengths_and_dev_areas(
+            fa_b5_for_validation, result.trait_strengths, result.personality_development_areas,
+        )
+
+        # (#7) HR summary from final scores
         emo_summary = result.emotion_summary or {}
         dominant_emo = emo_summary.get("dominant_emotion", "neutral")
+        # (B5) L2: relabel 'sad' → 'subdued/neutral' in HR summary
+        if l2_adj and dominant_emo == "sad":
+            dominant_emo = "subdued/neutral"
         mot_score = result.motivation.motivation_score
         eng_score = result.engagement.engagement_score if result.engagement else None
         hr_summary_generated = generate_hr_summary_from_scores(
@@ -353,6 +379,7 @@ def process_single(
                 "emotion_timeline": va.get("emotion_timeline"),
                 "emotion_aggregates": va.get("emotion_aggregates"),
                 "paralinguistic_summary": va.get("paralinguistic_summary"),
+                "l2_adjustments": va.get("l2_adjustments"),
             },
 
             # ── 4. Legacy voice features ──

@@ -438,21 +438,24 @@ class MotivationScorer:
     
     def _determine_pattern(self, prosody: ProsodyFeatures, emotions: EmotionResult) -> str:
         """Determine motivation pattern from pitch slope and energy variability."""
-        pattern_parts = []
-        
         # Pitch slope pattern
         if prosody.pitch_slope > 0.3:
-            pattern_parts.append("rising")
+            pitch_label = "rising"
         elif prosody.pitch_slope < -0.3:
-            pattern_parts.append("falling")
+            pitch_label = "falling"
         else:
-            pattern_parts.append("consistent")
+            pitch_label = "consistent"
         
         # Energy variability
-        if prosody.energy_std > 0.03:
-            pattern_parts.append("fluctuating")
+        dynamic_energy = prosody.energy_std > 0.03
         
-        return " ".join(pattern_parts) if pattern_parts else "consistent"
+        # Combine without contradiction
+        if dynamic_energy:
+            if pitch_label == "consistent":
+                return "steady pitch, dynamic energy"
+            else:
+                return f"{pitch_label} with dynamic energy"
+        return pitch_label
     
     def analyze_temporal_dynamics(
         self, 

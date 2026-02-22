@@ -242,14 +242,21 @@ def compute_final_assessment(
             ci_lo = max(0, final_score - 10)
             ci_hi = min(100, final_score + 10)
 
+        # Per-module breakdown so user sees where confidence comes from
+        sources = {}
+        source_labels = ["basic_llm", "approximate_voice", "enriched_ablation"]
+        for idx, (s, c) in enumerate(zip(scores, confidences)):
+            sources[source_labels[idx]] = {"score": s, "confidence": c}
+
         entry = {
             "score": final_score,
             "confidence": avg_conf,
             "confidence_interval": [ci_lo, ci_hi],
             "label": score_to_label(final_score),
+            "sources": sources,
         }
 
-        if spread > 15:
+        if spread > 20:
             entry["calibration_warning"] = True
             calibration_warnings.append({
                 "trait": trait,

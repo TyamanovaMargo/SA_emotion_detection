@@ -55,6 +55,11 @@ class ProsodyExtractor:
             # Convert syllables/sec to words/min: (syl/sec) * 60 / 1.5
             speaking_rate = (articulation_rate * 60) / 1.5
         
+        # Cap WPM to human-plausible range [0, 250]
+        # Onset-based syllable estimation can wildly overestimate for some formats (.webm)
+        if speaking_rate > 250:
+            speaking_rate = min(speaking_rate, 250.0)
+        
         speech_to_silence_ratio = speech_time / total_pause_time if total_pause_time > 0 else 99.0
         
         rhythm_regularity = self._compute_rhythm_regularity(audio, sample_rate)

@@ -226,13 +226,20 @@ For each trait, cite specific voice feature values AND valence/arousal signals.
 
 STRUCTURED_OUTPUT_PROMPT = """Based on your analysis above, now provide a structured JSON output with the following format:
 
+IMPORTANT — "confidence" means: how sure are YOU (the model) about this specific score?
+- 80-100: Strong signal — multiple voice features clearly point to this score
+- 60-79: Moderate signal — some features support this score but evidence is mixed
+- 40-59: Weak signal — limited data or conflicting features, score is a rough estimate
+- 0-39: Very uncertain — mostly guessing, very little supporting evidence
+Each trait MUST have a DIFFERENT confidence based on how much voice data supports it. Do NOT default all to 50.
+
 {{
   "big_five": {{
-    "openness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<brief reason>"}},
-    "conscientiousness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<brief reason>"}},
-    "extraversion": {{"score": <0-100>, "confidence": <0-100>, "reason": "<brief reason>"}},
-    "agreeableness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<brief reason>"}},
-    "neuroticism": {{"score": <0-100>, "confidence": <0-100>, "reason": "<brief reason>"}}
+    "openness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<cite specific voice metrics>"}},
+    "conscientiousness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<cite specific voice metrics>"}},
+    "extraversion": {{"score": <0-100>, "confidence": <0-100>, "reason": "<cite specific voice metrics>"}},
+    "agreeableness": {{"score": <0-100>, "confidence": <0-100>, "reason": "<cite specific voice metrics>"}},
+    "neuroticism": {{"score": <0-100>, "confidence": <0-100>, "reason": "<cite specific voice metrics>"}}
   }},
   "motivation": {{
     "overall_level": "<High/Medium/Low>",

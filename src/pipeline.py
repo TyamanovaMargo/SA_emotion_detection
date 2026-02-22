@@ -181,6 +181,9 @@ class HRAssessmentPipeline:
             prosody = self.prosody_extractor.extract(
                 audio, sample_rate, transcription.word_count, duration
             )
+            # B2: Cap legacy WPM for L2 speakers (matches voice_analyzer L2 cap)
+            if language_profile in ("non_native_english", "sea_english") and prosody.speaking_rate_wpm > 220:
+                prosody.speaking_rate_wpm = 220.0
             
             # Free Whisper GPU memory before loading emotion model
             if self._transcriber is not None:
@@ -227,6 +230,7 @@ class HRAssessmentPipeline:
             progress.update(task, description="Running unified voice analysis (MERaLiON-SER emotion dynamics)...")
             voice_analysis = self.voice_analyzer.analyze(
                 audio, sample_rate, word_count=transcription.word_count,
+                language_profile=language_profile,
             )
 
             # Generate emotion timeline visualization

@@ -81,9 +81,14 @@ class VoiceAnalyzer:
         audio: np.ndarray,
         sample_rate: int,
         word_count: int = 0,
+        language_profile: str = "native_english",
     ) -> Dict[str, Any]:
         """
         Run full voice analysis and return simplified JSON structure.
+
+        Args:
+            language_profile: 'native_english', 'non_native_english', or 'sea_english'.
+                Used for L2 adjustments: confidence penalty, WPM cap, SAD relabeling.
 
         Returns:
             {
@@ -92,20 +97,50 @@ class VoiceAnalyzer:
                 "spectral": {...},
                 "emotion_timeline": [...],
                 "emotion_aggregates": {...},
-                "paralinguistic_summary": "..."
+                "paralinguistic_summary": "...",
+                "l2_adjustments": {...} | None
             }
         """
+        is_l2 = language_profile in ("non_native_english", "sea_english")
         duration = len(audio) / sample_rate
 
         prosody = self._extract_prosody(audio, sample_rate, word_count, duration)
+
+        # L2 adjustment: cap WPM at 220 for non-native (onset detection overestimates)
+        if is_l2:
+            wpm = prosody.get("speaking_rate_wpm", 0)
+            if wpm > 220:
+                prosody["speaking_rate_wpm"] = 220.0
+
         voice_quality = self._extract_voice_quality(audio, sample_rate)
         spectral = self._extract_spectral(audio, sample_rate)
         emotion_timeline = self._build_emotion_timeline(audio, sample_rate)
+
+        # L2 adjustment: apply non-native confidence penalty
+        if is_l2:
+            emotion_timeline = self._apply_l2_confidence_penalty(emotion_timeline, factor=0.85)
+
         emotion_aggregates = self._compute_emotion_aggregates(emotion_timeline, prosody)
         paralinguistic_summary = self._generate_paralinguistic_summary(
             prosody, voice_quality, spectral, emotion_aggregates, duration,
             emotion_timeline=emotion_timeline,
+            language_profile=language_profile,
         )
+
+        # L2 metadata for downstream Big Five adjustments
+        l2_adjustments = None
+        if is_l2:
+            l2_adjustments = {
+                "language_profile": language_profile,
+                "confidence_penalty": 0.85,
+                "wpm_cap": 220,
+                "big5_adjustments": {
+                    "extraversion": +10,
+                    "neuroticism": -13,
+                    "reason": "L2 speaker: fast speech reflects cognitive effort not extraversion; jitter reflects articulatory difficulty not emotional instability",
+                },
+                "sad_relabeled": True,
+            }
 
         return {
             "prosody": prosody,
@@ -114,6 +149,7 @@ class VoiceAnalyzer:
             "emotion_timeline": emotion_timeline,
             "emotion_aggregates": emotion_aggregates,
             "paralinguistic_summary": paralinguistic_summary,
+            "l2_adjustments": l2_adjustments,
         }
 
     # ------------------------------------------------------------------
@@ -205,6 +241,7 @@ class VoiceAnalyzer:
             "energy_std": round(energy_std, 5),
             "energy_range": round(energy_range, 5),
             "speech_rate": round(speech_rate, 2),
+            "speaking_rate_wpm": round(min(speech_rate * 60 / 1.5, 250.0), 1) if speech_rate > 0 else 0,
             "voiced_ratio": round(voiced_ratio, 3),
             "pause_count": pause_count,
             "pause_mean_duration": round(pause_mean_duration, 3),
@@ -417,9 +454,15 @@ class VoiceAnalyzer:
 
             vad = {k: round(v, 4) for k, v in vad.items()}
 
+            # Resolve dominant emotion and confidence for this segment
+            dominant_emo = max(scores, key=scores.get)
+            dominant_conf = scores[dominant_emo]
+
             timeline.append({
                 "start_sec": round(start_sec, 2),
                 "end_sec": round(end_sec, 2),
+                "emotion": dominant_emo,
+                "confidence": round(dominant_conf, 4),
                 **scores,
                 "vad": vad,
             })
@@ -429,7 +472,52 @@ class VoiceAnalyzer:
         # Apply sticky-transition smoothing to reduce noisy emotion flipping
         if len(timeline) >= 3:
             timeline = self._smooth_timeline_sticky(timeline, penalty=0.15)
+            # Re-resolve emotion/confidence after smoothing changed scores
+            emotions_7 = ["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
+            for seg in timeline:
+                seg_scores = {e: seg.get(e, 0.0) for e in emotions_7}
+                dom = max(seg_scores, key=seg_scores.get)
+                seg["emotion"] = dom
+                seg["confidence"] = round(seg_scores[dom], 4)
 
+        return timeline
+
+    @staticmethod
+    def _apply_l2_confidence_penalty(
+        timeline: List[Dict[str, Any]],
+        factor: float = 0.85,
+    ) -> List[Dict[str, Any]]:
+        """Apply confidence penalty for non-native (L2) speakers.
+
+        Scales all emotion probabilities by `factor`, re-normalizes,
+        and updates the resolved emotion/confidence fields.
+        This reduces the weight of emotion predictions since the model
+        is less reliable for accented/L2 speech.
+        """
+        emotions_7 = ["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
+        for seg in timeline:
+            # Scale raw probabilities
+            for emo in emotions_7:
+                seg[emo] = seg.get(emo, 0.0) * factor
+            # Re-normalize to sum=1
+            total = sum(seg.get(e, 0.0) for e in emotions_7)
+            if total > 0:
+                for emo in emotions_7:
+                    seg[emo] = round(seg[emo] / total, 4)
+            # Update resolved fields
+            seg_scores = {e: seg.get(e, 0.0) for e in emotions_7}
+            dom = max(seg_scores, key=seg_scores.get)
+            seg["emotion"] = dom
+            seg["confidence"] = round(seg_scores[dom] * factor, 4)
+            # Recompute VAD
+            vad = {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
+            for emo in emotions_7:
+                ev = EMOTION_VAD.get(emo, EMOTION_VAD["neutral"])
+                prob = seg.get(emo, 0.0)
+                vad["valence"] += prob * ev["valence"]
+                vad["arousal"] += prob * ev["arousal"]
+                vad["dominance"] += prob * ev["dominance"]
+            seg["vad"] = {k: round(v, 4) for k, v in vad.items()}
         return timeline
 
     @staticmethod
@@ -655,9 +743,14 @@ class VoiceAnalyzer:
         emotion_agg: Dict[str, Any],
         duration: float,
         emotion_timeline: Optional[List[Dict[str, Any]]] = None,
+        language_profile: str = "native_english",
     ) -> str:
         """Generate a detailed text summary of voice profile for LLM consumption."""
+        is_l2 = language_profile in ("non_native_english", "sea_english")
         parts = []
+
+        if is_l2:
+            parts.append("[L2 speaker — emotion model less reliable, prosody proxies preferred]")
 
         # --- Pitch profile ---
         f0 = prosody.get("f0_mean", 0)
@@ -665,7 +758,10 @@ class VoiceAnalyzer:
         if f0 > 0:
             pitch_level = "high" if f0 > 200 else "low" if f0 < 130 else "medium"
             variability = "high" if f0_std > 30 else "low" if f0_std < 15 else "moderate"
-            trait_hint = "(extraverted)" if variability == "high" else "(introverted)" if variability == "low" else ""
+            if is_l2:
+                trait_hint = "(L2: high variability may reflect prosodic transfer)" if variability == "high" else ""
+            else:
+                trait_hint = "(extraverted)" if variability == "high" else "(introverted)" if variability == "low" else ""
             parts.append(f"{pitch_level} pitch with {variability} variability {trait_hint}".strip())
 
         # --- Speech rate ---
@@ -674,7 +770,10 @@ class VoiceAnalyzer:
         if rate > 0:
             speed = "fast" if rate > 5.0 else "slow" if rate < 3.0 else "moderate"
             pauses = "few pauses" if pause_ratio < 0.1 else "many pauses" if pause_ratio > 0.25 else "moderate pauses"
-            conf_hint = "(confident)" if speed in ["fast", "moderate"] and pause_ratio < 0.15 else "(hesitant)" if pause_ratio > 0.25 else ""
+            if is_l2:
+                conf_hint = "(L2: pauses may reflect cognitive load, not hesitancy)" if pause_ratio > 0.15 else ""
+            else:
+                conf_hint = "(confident)" if speed in ["fast", "moderate"] and pause_ratio < 0.15 else "(hesitant)" if pause_ratio > 0.25 else ""
             parts.append(f"speaks {speed} with {pauses} {conf_hint}".strip())
 
         # --- Stress peaks ---
@@ -699,6 +798,13 @@ class VoiceAnalyzer:
         # --- Dominant / ending emotion (#8: use last 20% of timeline) ---
         emo_stats = emotion_agg.get("emotion_stats", {})
         emotions_7 = ["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
+
+        def _l2_relabel(emo: str) -> str:
+            """For L2 speakers, relabel 'sad' as 'subdued/neutral'."""
+            if is_l2 and emo == "sad":
+                return "subdued/neutral"
+            return emo
+
         if emo_stats:
             sorted_by_dom = sorted(emo_stats, key=lambda e: emo_stats[e].get("dominant_segments", 0), reverse=True)
             dominant = sorted_by_dom[0]
@@ -716,17 +822,22 @@ class VoiceAnalyzer:
                     tail_counts[winner] = tail_counts.get(winner, 0) + 1
                 ending_emo = max(tail_counts, key=tail_counts.get) if tail_counts else dominant
 
+            d_label = _l2_relabel(dominant)
+            s_label = _l2_relabel(second)
+            e_label = _l2_relabel(ending_emo)
+
             if arc == "fluctuating":
-                parts.append(f"fluctuates between {dominant}/{second}, ending {ending_emo}")
+                parts.append(f"fluctuates between {d_label}/{s_label}, ending {e_label}")
             else:
-                parts.append(f"stabilizes {dominant}, ending {ending_emo}")
+                parts.append(f"stabilizes {d_label}, ending {e_label}")
 
         # --- Voice quality ---
         hnr = voice_quality.get("HNR", 0)
         jitter = voice_quality.get("jitter", 0)
         if hnr > 0:
             quality = "clear" if hnr > 15 else "breathy/rough"
-            parts.append(f"{quality} voice (HNR={hnr:.1f}dB)")
+            l2_note = " (L2: low HNR may reflect accent, not emotional state)" if is_l2 and hnr <= 15 else ""
+            parts.append(f"{quality} voice (HNR={hnr:.1f}dB){l2_note}")
 
         # --- Acoustic confidence ---
         derived = emotion_agg.get("derived", {})
