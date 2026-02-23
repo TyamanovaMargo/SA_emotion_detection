@@ -163,7 +163,10 @@ class MotivationScorer:
         score += emotion_score
         components['emotion'] = emotion_score
         if emotion_score != 0:
-            indicators.append(f"emotional_trend={emotion_score/16:.2f} ({'positive' if emotion_score > 0 else 'negative'})")
+            # Max possible emotion score = 12 * emotion_weight + 3 * emotion_weight + 6 + 4 ≈ 25
+            # Show actual valence trend direction, not raw score
+            trend_val = round(emotion_score / 25.0, 2)
+            indicators.append(f"emotional_trend={trend_val:.2f} ({'positive' if emotion_score > 0 else 'negative'})")
         
         # Clamp to valid range
         motivation_score = int(np.clip(score, 0, 100))
@@ -178,14 +181,16 @@ class MotivationScorer:
             extraversion_factor = 0.6 + 0.4 * (extraversion_score / 100.0)
             
             # Voice engagement bonus: energy + pace dynamics (max +5)
+            # Bug L3 fix: apply cap AFTER adding voice_bonus, not before
             voice_bonus = 0.0
             if prosody.energy_mean > self.energy_high_threshold:
                 voice_bonus += 2.5
             if prosody.speaking_rate_wpm > self.rate_high_threshold:
                 voice_bonus += 2.5
             
-            engagement_score = int(round(motivation_score * extraversion_factor + voice_bonus))
-            engagement_score = min(engagement_score, motivation_score)  # never exceed motivation
+            raw_engagement = motivation_score * extraversion_factor + voice_bonus
+            # Cap: engagement cannot exceed motivation_score (voice_bonus can push it over)
+            engagement_score = int(round(min(raw_engagement, motivation_score)))
             engagement_score = max(0, min(100, engagement_score))
         
         # Determine motivation level with hysteresis
@@ -369,7 +374,7 @@ class MotivationScorer:
                 if confidence > 0.5:
                     if 'happy' in emotion or 'surprised' in emotion:
                         positive_count += 1
-                    elif 'sad' in emotion or 'fearful' in emotion:
+                    elif emotion in ('sad', 'fearful', 'angry', 'disgusted'):
                         negative_count += 1
             
             emotional_trend = (positive_count - negative_count) / valid_count
@@ -417,21 +422,26 @@ class MotivationScorer:
             if confidence > 0.3:
                 emotions_present.add(emotion)
         
-        # Variability = number of distinct emotions / total possible (8 emotions)
-        variability = len(emotions_present) / 8.0
+        # Variability = number of distinct emotions / total possible (7 emotions used)
+        # Bug L4 fix: was dividing by 8 but only 7 emotion labels are used
+        variability = len(emotions_present) / 7.0
         return variability
     
     def _determine_level_with_hysteresis(self, score: int) -> str:
         """
         Determine motivation level with hysteresis to prevent flickering.
         
-        Scores near boundaries (33-46, 63-77) are set to Medium.
+        Bug L2 fix: previous ranges overlapped (33-46 AND <40 both matched score=35).
+        Clear non-overlapping bands:
+          <33          → Low
+          33-46        → Medium (hysteresis buffer near Low boundary)
+          47-62        → Medium
+          63-77        → Medium (hysteresis buffer near High boundary)
+          >77          → High
         """
-        if 33 <= score <= 46 or 63 <= score <= 77:
-            return "Medium"
-        elif score < 40:
+        if score < 33:
             return "Low"
-        elif score >= 70:
+        elif score > 77:
             return "High"
         else:
             return "Medium"

@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SA Emotion Detection Pipeline — Diagrams</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d1a;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      padding: 32px 24px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 1.6rem;
+      color: #4a90d9;
+      margin-bottom: 8px;
+      letter-spacing: 1px;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #888;
+      font-size: 0.9rem;
+      margin-bottom: 36px;
+    }
+
+    .tabs {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+    }
+
+    .tab-btn {
+      padding: 10px 24px;
+      border: 1px solid #4a90d9;
+      background: transparent;
+      color: #4a90d9;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover { background: #1a2a3a; }
+    .tab-btn.active { background: #4a90d9; color: #fff; }
+
+    .diagram-panel { display: none; }
+    .diagram-panel.active { display: block; }
+
+    .diagram-title {
+      font-size: 1.1rem;
+      color: #7ed321;
+      margin-bottom: 6px;
+      padding-left: 4px;
+    }
+
+    .diagram-desc {
+      font-size: 0.82rem;
+      color: #888;
+      margin-bottom: 20px;
+      padding-left: 4px;
+    }
+
+    .mermaid-wrap {
+      background: #111122;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 24px;
+      overflow-x: auto;
+    }
+
+    .mermaid { min-width: 600px; }
+  </style>
+</head>
+<body>
+
+<h1>SA Emotion Detection Pipeline</h1>
+<p class="subtitle">Voice analysis · Personality assessment · Emotion timeline</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab('tab1', this)">1 · Pipeline Flow</button>
+  <button class="tab-btn" onclick="showTab('tab2', this)">2 · Data Flow</button>
+  <button class="tab-btn" onclick="showTab('tab3', this)">3 · Features → Big Five</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ TAB 1 -->
+<div id="tab1" class="diagram-panel active">
+  <div class="diagram-title">Pipeline Flow — Step by Step</div>
+  <div class="diagram-desc">Audio file → transcription → feature extraction → LLM assessment → JSON report</div>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+flowchart TD
+    A([🎙️ Audio File\n.m4a / .webm / .mp3]) --> B
+
+    subgraph STEP1["Step 1 — Load & Transcribe"]
+        B[Load Audio\nResample to 16kHz] --> C{skip_transcription?}
+        C -- No --> D[Whisper Model\nSpeech → Text]
+        C -- Yes --> E[Voice-only mode\nword_count = 0]
+        D --> F[Language Detection\nwhisper-base on CPU]
+        F --> G{confidence > 0.97?}
+        G -- Yes --> H[native_english]
+        G -- No --> I[non_native_english\nor sea_english]
+    end
+
+    subgraph STEP2["Step 2 — Prosody  librosa"]
+        J[Pitch F0\nmean · std · slope · range]
+        K[Energy\nmean · std · range]
+        L[Speaking Rate\nWPM — cap 220 L2 / 250 native]
+        M[Pauses\ncount · duration · ratio]
+        N[Rhythm Regularity]
+    end
+
+    subgraph STEP3["Step 3 — Voice Quality  Praat/parselmouth"]
+        O[HNR\nHarmonics-to-Noise Ratio]
+        P[Jitter\npitch micro-variation]
+        Q[Shimmer\nloudness micro-variation]
+        R[H1-H2\nbreathiness]
+    end
+
+    subgraph STEP4["Step 4 — Spectral  librosa"]
+        S[MFCC 1–13\nmean + std = 26 values]
+    end
+
+    subgraph STEP5["Step 5 — Emotion Timeline  MERaLiON-SER-v1"]
+        T[Split audio into\n5s windows · step=2s] --> U[MERaLiON Transformer\nHuggingFace]
+        U --> V[7 emotion probs per segment\nangry · happy · sad · neutral\nfearful · surprised · disgusted]
+        V --> W[Temperature Scaling\nsoften overconfident scores]
+        W --> X[Sticky Smoothing\nprevent rapid flipping]
+        X --> Y{L2 speaker?}
+        Y -- Yes --> Z[Confidence × 0.85\npenalty for accented speech]
+        Y -- No --> AA[Keep as-is]
+        Z --> AB[VAD per segment\nValence / Arousal / Dominance]
+        AA --> AB
+    end
+
+    subgraph STEP6["Step 6 — eGeMAPS  openSMILE"]
+        AC[88 acoustic features\nloudness · F0 · MFCC\njitter · shimmer · spectral flux]
+    end
+
+    subgraph STEP7["Step 7 — LLM Assessment  Groq API"]
+        AD[Module 1: Basic LLM\nProsody + Voice Quality\n+ Emotion Summary → Big Five]
+        AE[Module 2: Approximate\neGeMAPS + Timeline only\nno transcript]
+        AF[Module 3: Enriched Ablation\nre-score with emotion\ntimeline enrichment]
+        AD --> AG[Weighted Average\nby confidence]
+        AE --> AG
+        AF --> AG
+        AG --> AH{L2 speaker?}
+        AH -- Yes --> AI[Extraversion +10\nNeuroticism −13]
+        AH -- No --> AJ[Keep scores]
+    end
+
+    subgraph STEP8["Step 8 — Motivation & Engagement  rule-based"]
+        AK[Pace score\nWPM vs profile thresholds]
+        AL[Energy score\nmean + std]
+        AM[Pause score\npauses per minute]
+        AN[Pitch dynamics\nslope + variance]
+        AO[Emotional trend\nvalence slope]
+        AK & AL & AM & AN & AO --> AP[Motivation Score 0–100\nEngagement Score 0–100]
+    end
+
+    subgraph STEP9["Step 9 — Output Assembly  main.py"]
+        AQ[Final Assessment\nweighted Big Five + CI + warnings]
+        AR[Strengths & Dev Areas\nfrom final scores]
+        AS[HR Summary\n3-sentence narrative]
+        AT[Paralinguistic Summary\nL2-aware text for LLM]
+        AU[Calibration Warnings\nspread > 20 across modules]
+        AV[L2 Adjustments\nnotes + relabeled emotions]
+    end
+
+    H --> STEP2
+    I --> STEP2
+    E --> STEP2
+    D --> STEP2
+
+    STEP2 --> STEP3
+    STEP2 --> STEP4
+    STEP2 --> STEP5
+    STEP2 --> STEP6
+    STEP2 --> STEP7
+    STEP3 --> STEP7
+    STEP4 --> STEP7
+    STEP5 --> STEP7
+    STEP5 --> STEP8
+    STEP6 --> STEP7
+    STEP7 --> STEP9
+    STEP8 --> STEP9
+
+    STEP9 --> OUT([📄 JSON Report\nBig Five · Emotion Timeline\nMotivation · HR Summary\nCalibration Warnings])
+
+    style STEP1 fill:#1a1a2e,stroke:#4a90d9,color:#fff
+    style STEP2 fill:#16213e,stroke:#4a90d9,color:#fff
+    style STEP3 fill:#0f3460,stroke:#4a90d9,color:#fff
+    style STEP4 fill:#1a1a2e,stroke:#4a90d9,color:#fff
+    style STEP5 fill:#2d1b33,stroke:#e94560,color:#fff
+    style STEP6 fill:#0f3460,stroke:#4a90d9,color:#fff
+    style STEP7 fill:#2e2a1a,stroke:#f5a623,color:#fff
+    style STEP8 fill:#1a2e1a,stroke:#7ed321,color:#fff
+    style STEP9 fill:#0f2a0f,stroke:#7ed321,color:#fff
+    style A fill:#e94560,stroke:#fff,color:#fff
+    style OUT fill:#7ed321,stroke:#fff,color:#000
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ TAB 2 -->
+<div id="tab2" class="diagram-panel">
+  <div class="diagram-title">Data Flow — Features → Modules → Output</div>
+  <div class="diagram-desc">Which extracted features feed into which scoring modules and output fields</div>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+flowchart LR
+    subgraph AUDIO["🎙️ Raw Audio"]
+        A1[Waveform\n16kHz mono]
+    end
+
+    subgraph FEATURES["Feature Extraction Layer"]
+        direction TB
+
+        subgraph PROS["Prosody — librosa"]
+            P1[f0_mean / f0_std\nf0_slope / f0_range]
+            P2[energy_mean / energy_std]
+            P3[speaking_rate_wpm]
+            P4[pauses_per_minute\npause_duration_mean]
+            P5[rhythm_regularity\nvoiced_ratio]
+        end
+
+        subgraph VQ["Voice Quality — Praat"]
+            V1[HNR dB]
+            V2[jitter %]
+            V3[shimmer %]
+            V4[H1-H2 breathiness]
+        end
+
+        subgraph SPEC["Spectral — librosa"]
+            S1[MFCC 1–13\nmean + std]
+        end
+
+        subgraph EMO["Emotion — MERaLiON-SER-v1"]
+            E1[Per-segment probs\n7 emotions]
+            E2[Valence −1→+1]
+            E3[Arousal −1→+1]
+            E5[arc_type]
+            E6[valence_slope\narousal_slope]
+            E7[stress_index\nconfidence_score]
+        end
+
+        subgraph EGEM["eGeMAPS — openSMILE"]
+            G1[88 acoustic features]
+        end
+
+        subgraph TRANS["Transcript — Whisper"]
+            T1[word_count\nlanguage / profile]
+            T2[text content]
+        end
+    end
+
+    subgraph SCORING["Scoring Layer"]
+        direction TB
+
+        subgraph MOT["Motivation — rule-based"]
+            M1[pace_score]
+            M2[energy_score]
+            M3[pause_score]
+            M4[pitch_dynamics]
+            M5[emotional_trend]
+            M1 & M2 & M3 & M4 & M5 --> M6[motivation 0–100\nengagement 0–100]
+        end
+
+        subgraph LLM1["Module 1 — Basic LLM"]
+            L1[Big Five\n+ confidence]
+        end
+
+        subgraph LLM2["Module 2 — Approximate"]
+            L2[Big Five range\nvoice-only]
+        end
+
+        subgraph LLM3["Module 3 — Enriched"]
+            L3[Big Five updated\nwith emotion]
+        end
+
+        subgraph FINAL["Final Assessment"]
+            F1[Weighted Average\nby confidence]
+            F2{L2 speaker?}
+            F3[E +10 · N −13]
+            F4[Final Big Five\n+ CI + sources]
+            F1 --> F2
+            F2 -- yes --> F3 --> F4
+            F2 -- no --> F4
+        end
+    end
+
+    subgraph OUTPUT["📄 JSON Output"]
+        O1[personality_assessment]
+        O2[final_assessment\nper-module sources]
+        O3[emotion_summary]
+        O4[motivation_engagement]
+        O5[paralinguistic_summary]
+        O6[hr_summary]
+        O7[calibration_warnings]
+        O8[l2_adjustments]
+    end
+
+    A1 --> PROS & VQ & SPEC & EMO & EGEM & TRANS
+
+    P1 & P2 & P3 & P4 --> M1 & M2 & M3 & M4
+    E6 --> M5
+
+    P1 & P2 & P3 & P4 & P5 --> L1
+    V1 & V2 & V3 & V4 --> L1
+    E1 & E2 & E3 & E5 & E6 & E7 --> L1
+    T1 & T2 --> L1
+
+    G1 --> L2
+    E1 & E2 & E3 --> L2
+
+    E1 & E5 & E6 & E7 --> L3
+    L1 --> L3
+
+    L1 --> F1
+    L2 --> F1
+    L3 --> F1
+
+    F4 --> O2
+    L1 --> O1
+    M6 --> O4
+    EMO --> O3
+    F4 & O3 & O4 --> O6
+    F4 --> O7
+    TRANS --> O8
+    P1 & P2 & P3 & VQ & EMO --> O5
+
+    style AUDIO fill:#e94560,stroke:#fff,color:#fff
+    style PROS fill:#1a1a2e,stroke:#4a90d9,color:#fff
+    style VQ fill:#0f3460,stroke:#4a90d9,color:#fff
+    style SPEC fill:#16213e,stroke:#4a90d9,color:#fff
+    style EMO fill:#2d1b33,stroke:#e94560,color:#fff
+    style EGEM fill:#1a1a2e,stroke:#4a90d9,color:#fff
+    style TRANS fill:#16213e,stroke:#4a90d9,color:#fff
+    style MOT fill:#1a2e1a,stroke:#7ed321,color:#fff
+    style LLM1 fill:#2e2a1a,stroke:#f5a623,color:#fff
+    style LLM2 fill:#2e2a1a,stroke:#f5a623,color:#fff
+    style LLM3 fill:#2e2a1a,stroke:#f5a623,color:#fff
+    style FINAL fill:#1a2e1a,stroke:#7ed321,color:#fff
+    style OUTPUT fill:#0d1f0d,stroke:#7ed321,color:#fff
+    style FEATURES fill:#0d0d1a,stroke:#2a2a4a,color:#fff
+    style SCORING fill:#0d0d1a,stroke:#2a2a4a,color:#fff
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ TAB 3 -->
+<div id="tab3" class="diagram-panel">
+  <div class="diagram-title">Voice Features → Big Five Traits</div>
+  <div class="diagram-desc">Which acoustic signals map to which personality dimensions (with L2 adjustments)</div>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+flowchart TD
+    subgraph VOICE["🎙️ Voice Features"]
+        F1[pitch_variance\nf0_std]
+        F2[speaking_rate_wpm]
+        F3[energy_mean\nenergy_std]
+        F4[pauses_per_minute\npause_duration]
+        F5[HNR · jitter · shimmer]
+        F6[valence_mean\nvalence_slope]
+        F7[arousal_mean\narousal_slope]
+        F8[emotion_volatility\nemotion_distribution]
+        F9[rhythm_regularity]
+        F10[pitch_slope]
+    end
+
+    subgraph BIG5["Big Five Traits"]
+        O[🟣 Openness]
+        C[🔵 Conscientiousness]
+        E[🟢 Extraversion]
+        A[🟡 Agreeableness]
+        N[🔴 Neuroticism]
+    end
+
+    subgraph L2["L2 Adjustments\nnon_native_english"]
+        LA[Extraversion\nfinal score +10\nfast speech = cognitive effort]
+        LN[Neuroticism\nfinal score −13\njitter = articulation difficulty]
+    end
+
+    F1 -->|high variety = open| O
+    F8 -->|varied emotions = open| O
+    F7 -->|high arousal = open| O
+
+    F9 -->|regular rhythm = conscientious| C
+    F4 -->|few pauses = disciplined| C
+    F7 -->|stable arousal = conscientious| C
+
+    F2 -->|fast speech = extraverted| E
+    F3 -->|high energy = extraverted| E
+    F1 -->|expressive pitch = extraverted| E
+    F10 -->|rising pitch = engaged| E
+
+    F6 -->|positive valence = agreeable| A
+    F5 -->|clear voice HNR = agreeable| A
+
+    F5 -->|high jitter = neurotic| N
+    F6 -->|negative valence = neurotic| N
+    F8 -->|volatile emotions = neurotic| N
+    F4 -->|many pauses = anxious| N
+
+    E --> LA
+    N --> LN
+
+    style O fill:#6a0dad,stroke:#fff,color:#fff
+    style C fill:#1a5276,stroke:#fff,color:#fff
+    style E fill:#1e8449,stroke:#fff,color:#fff
+    style A fill:#7d6608,stroke:#fff,color:#fff
+    style N fill:#922b21,stroke:#fff,color:#fff
+    style VOICE fill:#1a1a2e,stroke:#4a90d9,color:#fff
+    style BIG5 fill:#0d0d1a,stroke:#4a90d9,color:#fff
+    style L2 fill:#2d1b33,stroke:#e94560,color:#fff
+    style LA fill:#1e8449,stroke:#7ed321,color:#fff
+    style LN fill:#922b21,stroke:#e94560,color:#fff
+    </div>
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      background: '#111122',
+      primaryColor: '#1a1a2e',
+      primaryTextColor: '#e0e0e0',
+      primaryBorderColor: '#4a90d9',
+      lineColor: '#4a90d9',
+      secondaryColor: '#16213e',
+      tertiaryColor: '#0f3460',
+      edgeLabelBackground: '#1a1a2e',
+      clusterBkg: '#0d0d1a',
+      clusterBorder: '#2a2a4a',
+    },
+    flowchart: {
+      curve: 'basis',
+      padding: 20,
+    }
+  });
+
+  function showTab(id, btn) {
+    document.querySelectorAll('.diagram-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    btn.classList.add('active');
+  }
+</script>
+
+</body>
+</html>

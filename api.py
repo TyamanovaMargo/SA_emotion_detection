@@ -19,6 +19,13 @@ from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
 from src.models.schemas import HRAssessmentResult
 from src.utils.reporting import generate_html_report
+from src.utils.scoring import (
+    score_to_label,
+    validate_strengths_and_dev_areas,
+    compute_final_assessment,
+    generate_hr_summary_from_scores,
+    compute_content_voice_alignment,
+)
 
 
 app = FastAPI(
@@ -48,17 +55,17 @@ def get_pipeline() -> HRAssessmentPipeline:
 
 
 class AssessmentResponse(BaseModel):
-    """API response model."""
+    """API response model — mirrors the full JSON report from main.py."""
     success: bool
-    candidate_id: Optional[str]
-    position: Optional[str]
-    big_five: dict
-    motivation: dict
-    trait_strengths: list
-    motivation_strengths: list
-    personality_development_areas: list
-    motivation_development_areas: list
+    candidate_id: Optional[str] = None
+    position: Optional[str] = None
+    personality_assessment: dict
+    final_assessment: dict
+    motivation_engagement: dict
+    emotion_summary: Optional[dict] = None
+    voice_analysis: Optional[dict] = None
     hr_summary: str
+    pipeline_metadata: Optional[dict] = None
 
 
 @app.get("/")
@@ -114,29 +121,85 @@ async def assess_candidate(
             position=position,
             save_output=False,
         )
-        
+
+        # Build full report (same logic as main.py process_single)
+        va = result.voice_analysis or {}
+        b5 = {}
+        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
+            s = getattr(result.big_five, trait)
+            b5[trait] = {"score": s.score, "confidence": s.confidence, "reason": s.reason}
+
+        l2_adj = va.get("l2_adjustments")
+
+        approx_b5_raw = None
+        if result.approximate_assessment:
+            approx_b5_raw = result.approximate_assessment.model_dump().get("big5_approximate", {})
+        enriched_b5 = None
+        if result.llm_comparison and isinstance(result.llm_comparison, dict):
+            enriched_b5 = result.llm_comparison.get("enriched_big5", {})
+
+        final_assessment = compute_final_assessment(b5, approx_b5_raw, enriched_b5)
+
+        # Apply L2 adjustments to final scores
+        if l2_adj:
+            b5_adj = l2_adj.get("big5_adjustments", {})
+            traits_fa = final_assessment.get("traits", {})
+            for t_name, delta in b5_adj.items():
+                if t_name in traits_fa and isinstance(delta, (int, float)):
+                    old = traits_fa[t_name]["score"]
+                    traits_fa[t_name]["score"] = max(0, min(100, old + delta))
+                    traits_fa[t_name]["label"] = score_to_label(traits_fa[t_name]["score"])
+                    traits_fa[t_name]["l2_delta"] = delta
+
+        # Validated strengths from final scores
+        fa_b5 = {t: {"score": final_assessment.get("traits", {}).get(t, {}).get("score", 50)}
+                 for t in b5}
+        strengths, dev_areas = validate_strengths_and_dev_areas(
+            fa_b5, result.trait_strengths, result.personality_development_areas)
+
+        emo_summary = result.emotion_summary or {}
+        dominant_emo = emo_summary.get("dominant_emotion", "neutral")
+        if l2_adj and dominant_emo == "sad":
+            dominant_emo = "subdued/neutral"
+
+        mot_score = result.motivation.motivation_score
+        eng_score = result.engagement.engagement_score if result.engagement else None
+        hr_summary = generate_hr_summary_from_scores(
+            final_assessment, mot_score, eng_score, dominant_emo)
+
         return AssessmentResponse(
             success=True,
             candidate_id=result.candidate_id,
             position=result.position,
-            big_five={
-                "openness": result.big_five.openness.model_dump(),
-                "conscientiousness": result.big_five.conscientiousness.model_dump(),
-                "extraversion": result.big_five.extraversion.model_dump(),
-                "agreeableness": result.big_five.agreeableness.model_dump(),
-                "neuroticism": result.big_five.neuroticism.model_dump(),
+            personality_assessment={"big_five": b5, "strengths": strengths, "development_areas": dev_areas},
+            final_assessment=final_assessment,
+            motivation_engagement={
+                "motivation": {
+                    "level": result.motivation.overall_level,
+                    "score": mot_score,
+                    "pattern": result.motivation.pattern,
+                    "voice_indicators": result.motivation.voice_indicators,
+                },
+                "engagement": {
+                    "level": result.engagement.overall_level,
+                    "score": eng_score,
+                    "reason": result.engagement.reason,
+                },
             },
-            motivation=result.motivation.model_dump(),
-            trait_strengths=result.trait_strengths,
-            motivation_strengths=result.motivation_strengths,
-            personality_development_areas=result.personality_development_areas,
-            motivation_development_areas=result.motivation_development_areas,
-            hr_summary=result.hr_summary,
+            emotion_summary=emo_summary,
+            voice_analysis={
+                "prosody": va.get("prosody"),
+                "voice_quality": va.get("voice_quality"),
+                "emotion_aggregates": va.get("emotion_aggregates"),
+                "l2_adjustments": l2_adj,
+            },
+            hr_summary=hr_summary,
+            pipeline_metadata={"pipeline_version": "2.0.0", "processing_date": datetime.now().isoformat()},
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
     finally:
         os.unlink(tmp_path)
 

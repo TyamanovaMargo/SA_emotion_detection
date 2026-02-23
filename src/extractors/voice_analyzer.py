@@ -603,9 +603,12 @@ class VoiceAnalyzer:
         for emo in emotions_7:
             vals = [seg.get(emo, 0.0) for seg in timeline]
             arr = np.array(vals)
-            dominant_count = sum(1 for seg in timeline if max(
-                (seg.get(e, 0.0) for e in emotions_7), default=0
-            ) == seg.get(emo, 0.0) and seg.get(emo, 0.0) > 0)
+            # Bug L5 fix: use argmax — only the single top emotion per segment
+            # counts as dominant. Previous max()==value counted ties.
+            dominant_count = sum(
+                1 for seg in timeline
+                if max(emotions_7, key=lambda e2: seg.get(e2, 0.0)) == emo
+            )
 
             emotion_stats[emo] = {
                 "mean": round(float(np.mean(arr)), 4),
@@ -644,8 +647,9 @@ class VoiceAnalyzer:
         # Arousal volatility
         arousal_volatility = round(float(np.std(arousals)), 4)
 
-        # Stress segments: arousal > 0.7 AND valence < 0.4
-        stress_mask = (arousals > 0.7) & (valences < 0.4)
+        # Stress segments: high arousal AND negative valence
+        # Valence is on [-1, +1] scale, so < 0.0 means genuinely negative emotional state
+        stress_mask = (arousals > 0.5) & (valences < 0.0)
         stress_segments = int(np.sum(stress_mask))
 
         # Emotional shifts: count transitions where dominant emotion changes

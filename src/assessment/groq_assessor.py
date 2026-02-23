@@ -271,7 +271,7 @@ class GroqHRAssessor:
         
         # Use deterministic engagement score
         engagement_score = motivation_result['engagement_score']
-        engagement_level = "High" if engagement_score >= 70 else "Medium" if engagement_score >= 40 else "Low"
+        engagement_level = "High" if engagement_score > 77 else "Medium" if engagement_score >= 33 else "Low"
         
         engagement = EngagementAssessment(
             overall_level=engagement_level,

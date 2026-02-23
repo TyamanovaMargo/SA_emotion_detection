@@ -1,29 +1,30 @@
-version: '3.8'
-
 services:
-  hr-assessment-gpu:
+  # ── API Server (production) ─────────────────────────────────────────
+  hr-api:
     build: .
-    container_name: hr-assessment-pipeline-gpu
+    container_name: hr-assessment-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
     volumes:
-      # Mount your audio data (add more volumes as needed)
-      - ./audio:/app/audio:ro
-      # Mount output directory
+      # Persist outputs between restarts
       - ./outputs:/app/outputs
-      # Mount .env file
-      - ./.env:/app/.env:ro
+      # Persist downloaded models (Whisper, MERaLiON) so they survive rebuilds
+      - models_cache:/app/models_cache
+      # Audio input folder (read-only)
+      - ./audio:/app/audio:ro
+      - "./Team Recordings:/app/Team Recordings:ro"
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=cuda
       - EMOTION_DEVICE=cuda
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
-    # Allocate more memory for heavy models
-    mem_limit: 16g
+      - EMOTION_BATCH_SIZE=${EMOTION_BATCH_SIZE:-0}
+      - LANGUAGE_PROFILE=${LANGUAGE_PROFILE:-non_native_english}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     shm_size: 4g
-    # Use all available CPUs
-    cpus: "8.0"
-    # GPU support
     deploy:
       resources:
         reservations:
@@ -31,29 +32,37 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # Keep container running for interactive use
-    stdin_open: true
-    tty: true
-    # Override default command
-    command: tail -f /dev/null
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
-  # Optional: API service with GPU
-  hr-assessment-api-gpu:
+  # ── CLI Worker (batch processing) ───────────────────────────────────
+  hr-worker:
     build: .
-    container_name: hr-assessment-api-gpu
-    ports:
-      - "8000:8000"
+    container_name: hr-assessment-worker
+    profiles: ["worker"]
     volumes:
       - ./outputs:/app/outputs
-      - ./.env:/app/.env:ro
+      - models_cache:/app/models_cache
+      - ./audio:/app/audio:ro
+      - "./Team Recordings:/app/Team Recordings:ro"
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=cuda
       - EMOTION_DEVICE=cuda
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
-    mem_limit: 16g
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     shm_size: 4g
-    # GPU support
     deploy:
       resources:
         reservations:
@@ -61,4 +70,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    # Override: run batch processing then exit
+    # Usage: docker compose -f docker-compose.gpu.yml --profile worker run hr-worker python main.py "audio/interview.webm" --position "Developer"
+    entrypoint: ["python", "main.py"]
+    command: ["--help"]
+
+volumes:
+  models_cache:
+    name: hr_assessment_models

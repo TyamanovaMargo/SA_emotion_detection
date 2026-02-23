@@ -334,7 +334,6 @@ def process_single(
                     section["score_high"] = hi
 
         # (#19) Pipeline metadata
-        audio_dur = va.get("prosody", {}).get("f0_mean", 0)  # duration from result
         processing_metadata = {
             "pipeline_version": "2.0.0",
             "processing_date": datetime.now().isoformat(),
