@@ -101,7 +101,7 @@ class VoiceAnalyzer:
                 "l2_adjustments": {...} | None
             }
         """
-        is_l2 = language_profile in ("non_native_english", "sea_english")
+        is_l2 = True
         duration = len(audio) / sample_rate
 
         prosody = self._extract_prosody(audio, sample_rate, word_count, duration)
