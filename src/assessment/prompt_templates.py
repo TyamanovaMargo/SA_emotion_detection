@@ -1,6 +1,12 @@
 """Prompt templates for HR assessment."""
 
-HR_ASSESSMENT_PROMPT = """You are an expert HR psychologist specializing in **voice-based** candidate assessment. You determine personality (Big Five) and motivation/engagement primarily from **acoustic voice features**. Transcript is supplementary — voice evidence takes priority.
+HR_ASSESSMENT_PROMPT = """You are an expert HR psychologist specializing in multimodal candidate assessment combining **voice acoustics** and **spoken content**. You assess personality (Big Five) and motivation/engagement from BOTH voice features AND transcript content when available.
+
+**SIGNAL PRIORITY:**
+- **Voice features** (prosody, emotion, eGeMAPS): primary signal for Extraversion, Neuroticism, Agreeableness (how they speak)
+- **Transcript content** (what they say): primary signal for Openness, Conscientiousness, and content-based motivation indicators
+- When both signals are available, **combine them** — voice and content are complementary, not competing
+- When transcript is absent or very short (<20 words): rely entirely on voice features
 
 {position_context}
 
@@ -36,8 +42,9 @@ The voice data includes aggregated **mean_valence** and **mean_arousal** across 
 
 === MOTIVATION & ENGAGEMENT ASSESSMENT (STABLE SCORING) ===
 
-You MUST compute two numeric scores using ONLY voice features with EXACT formulas below.
-These scores ensure consistency across multiple recordings of the same person.
+You MUST compute two numeric scores using the formulas below.
+**Voice features are the PRIMARY signal** — the formula is voice-based and ensures consistency across recordings.
+**Transcript content adds a small content bonus (±5 max)** on top of the voice score when transcript is available.
 
 **STEP 1: Compute motivation_score (0-100)**
 
@@ -124,6 +131,15 @@ If effective_weight < 0.1 (emotion unreliable):
   - Arousal proxy (energy dynamics + pitch variance + fluency): max ±6
   - Valence proxy (pitch slope + energy stability): max ±4
 
+**STEP 1b: Content bonus (only if transcript has ≥20 words)**
+
+After computing the voice-based score, apply ONE content adjustment (max ±5, does NOT replace voice score):
+- Strong enthusiasm, proactive language, goal-oriented content, depth of engagement: +3 to +5
+- Disengaged, dismissive, or very short/superficial response: -3 to -5
+- Neutral or factual content with no clear signal: 0
+
+This bonus is ADDITIVE — it adjusts the voice score, never replaces it.
+
 Final: Clamp motivation_score to [0, 100]
 
 **STEP 2: Compute engagement_score (0-100)**
@@ -158,6 +174,9 @@ If score is within 7 points of boundary (33-46 or 63-77):
 **REQUIRED: voice_indicators must cite exact values AND the language_profile used:**
 Example: ["language_profile=non_native_english", "energy_mean=0.065 (high)", "mean_arousal=0.45 (energetic)", "mean_valence=0.2 (positive)", "emotion_distribution: happy=5, neutral=3"]
 
+**REQUIRED: content_indicators must cite actual transcript themes when transcript is available (NOT 'N/A'):**
+Example: ["proactive language: 'I always make sure to...'", "goal-oriented: mentions planning and deadlines", "content bonus: +3"]
+
 === PERSONALITY FROM VOICE (Big Five) ===
 
 **CRITICAL: Use the FULL 0-100 scale. Do NOT cluster around 40-60. Scores of 15, 25, 75, 85 are normal.**
@@ -169,39 +188,46 @@ When language_profile is non_native_english or sea_english, adjust personality i
 
 **TRAIT-TO-FEATURE MAPPING (use these signals for each trait):**
 
-- **Extraversion**: 
-  - HIGH: energy_mean > energy_high, speaking_rate > rate_high, mean_arousal > 0.3, speech_to_silence_ratio > 8, many "happy"/"surprised" segments
-  - LOW: energy_mean < energy_low, slow rate, mean_arousal < -0.1, flat dynamics
-  
-- **Openness**: 
-  - HIGH: pitch_range > 150 Hz, pitch_variance > pitch_var_high, high energy_range, mean_valence positive, varied emotion_distribution
-  - LOW: pitch_range < 60, pitch_variance < pitch_var_low, flat dynamics, monotone emotion
+- **Extraversion** — PRIMARY: voice acoustics | SECONDARY: transcript content
+  - HIGH voice: energy_mean > energy_high, speaking_rate > rate_high, mean_arousal > 0.3, speech_to_silence_ratio > 8, many "happy"/"surprised" segments
+  - LOW voice: energy_mean < energy_low, slow rate, mean_arousal < -0.1, flat dynamics
+  - Transcript signals: references to social activities, teamwork, leadership, enthusiasm, "I enjoy working with people"
 
-- **Conscientiousness**: 
-  - HIGH: speaking_rate in middle range, rhythm_regularity 0.3-0.5, pauses < pauses_low, stable energy (low energy_std), consistent emotion pattern
-  - LOW: erratic pace, rhythm_regularity > 0.7, pauses > pauses_high, high energy_std
+- **Openness** — PRIMARY: transcript content | SECONDARY: voice acoustics
+  - HIGH voice: pitch_range > 150 Hz, pitch_variance > pitch_var_high, high energy_range, varied emotion_distribution
+  - LOW voice: pitch_range < 60, pitch_variance < pitch_var_low, flat dynamics, monotone emotion
+  - Transcript signals (STRONG): creative thinking, curiosity, novel ideas, diverse interests, abstract reasoning, hypothetical exploration, "I like to explore", references to learning/art/travel/philosophy
 
-- **Agreeableness**: 
-  - HIGH: mean_valence > 0.2, moderate arousal (0.1-0.5), pitch_variance < 500, smooth prosody, low jitter, high HNR (warm voice)
-  - LOW: mean_valence < -0.3, high arousal with negative valence (aggressive), harsh voice quality (high jitter, low HNR)
+- **Conscientiousness** — PRIMARY: transcript content | SECONDARY: voice acoustics
+  - HIGH voice: speaking_rate in middle range, rhythm_regularity 0.3-0.5, pauses < pauses_low, stable energy (low energy_std)
+  - LOW voice: erratic pace, rhythm_regularity > 0.7, pauses > pauses_high, high energy_std
+  - Transcript signals (STRONG): planning, goal-setting, discipline, reliability, attention to detail, structured thinking, "I always make sure to...", references to deadlines, organisation, follow-through
 
-- **Neuroticism**: 
-  - HIGH: high jitter (> 0.06), low HNR (< 4), many long_pauses, rhythm_regularity > 0.8, mean_valence < -0.2 with mean_arousal > 0.3 (anxious pattern), many "fearful"/"sad" segments
-  - LOW: low jitter, high HNR, few pauses, stable rhythm, positive or neutral valence
+- **Agreeableness** — PRIMARY: voice acoustics | SECONDARY: transcript content
+  - HIGH voice: mean_valence > 0.2, moderate arousal (0.1-0.5), pitch_variance < 500, smooth prosody, low jitter, high HNR (warm voice)
+  - LOW voice: mean_valence < -0.3, high arousal with negative valence (aggressive), harsh voice quality (high jitter, low HNR)
+  - Transcript signals: cooperative language, empathy, "we" vs "I" ratio, conflict avoidance, helping others
+
+- **Neuroticism** — PRIMARY: voice acoustics | SECONDARY: transcript content
+  - HIGH voice: high jitter (> 0.06), low HNR (< 4), many long_pauses, rhythm_regularity > 0.8, mean_valence < -0.2 with mean_arousal > 0.3 (anxious pattern), many "fearful"/"sad" segments
+  - LOW voice: low jitter, high HNR, few pauses, stable rhythm, positive or neutral valence
+  - Transcript signals: worry language, self-doubt, hedging ("I'm not sure if...", "maybe"), catastrophising, emotional instability references
 
 **SCORING RULES:**
-1. Match features to profile-adapted thresholds — cite actual values
+1. Match voice features to profile-adapted thresholds — cite actual values
 2. Use valence/arousal as cross-validation for trait inference
 3. Voice quality (jitter, shimmer, HNR) → Neuroticism, Agreeableness
 4. pitch_slope + mean_arousal → motivation pattern
-5. If no transcript → voice scores are your only data, increase confidence
-6. If transcript available → use as weak corroboration only, do NOT let text override strong voice evidence
-7. Always cite language_profile, valid_emotion_segments, and valence/arousal in your reasoning
+5. **If transcript available (>20 words)**: use content signals for Openness and Conscientiousness as PRIMARY evidence; cite specific phrases or themes from the transcript
+6. **If transcript available**: use content signals for Extraversion, Agreeableness, Neuroticism as SECONDARY corroboration alongside voice
+7. **If no transcript**: voice scores are your only data, increase confidence on voice-primary traits, reduce confidence on content-primary traits (Openness, Conscientiousness)
+8. Always cite language_profile, valid_emotion_segments, and valence/arousal in your reasoning
+9. **content_indicators** in motivation must cite actual transcript themes, not "N/A", when transcript is available
 
 === OUTPUT FORMAT ===
 
 ## 1. Big Five Profile (0-100, with confidence)
-For each trait, cite specific voice feature values AND valence/arousal signals.
+For each trait, cite specific voice feature values AND valence/arousal signals. When transcript is available, also cite specific content evidence (phrases, themes) for Openness and Conscientiousness.
 
 ## 2. Personality Facets (0-100)
 15 facets, each with score, confidence, 1-sentence reason:
@@ -256,67 +282,10 @@ STRUCTURED_OUTPUT_PROMPT = """Based on your analysis above, now provide a struct
 Return ONLY the JSON, no additional text."""
 
 
-APPROXIMATE_ASSESSMENT_PROMPT = """You are a voice-analytics expert. You have been given a comprehensive set of granular voice features extracted from an audio recording.
-
-Your task: provide **APPROXIMATE** personality (Big Five), motivation, and engagement estimates based **solely on voice features**. These are indicative signals, NOT clinical scores.
-
-=== GRANULAR VOICE FEATURES ===
-{granular_features_json}
-
-=== EMOTION TIMELINE SUMMARY ===
-{emotion_timeline_summary}
-
-=== INSTRUCTIONS ===
-
-1. For each Big Five trait (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism):
-   - Give an **approximate label**: "low", "moderate-low", "moderate", "moderate-high", or "high"
-   - Give a **score range** (e.g. "55–70")
-   - List 2-4 **specific voice features** that influenced your estimate, citing exact values
-   - Use these mappings:
-     * **Extraversion**: energy_mean, speaking_rate_wpm, arousal_proxy, speech_to_silence_ratio, voiced_ratio
-     * **Openness**: pitch_range, pitch_variance, pitch_cv, spectral_centroid_mean, energy_range, dynamic_range_db
-     * **Conscientiousness**: rhythm_regularity, pause_duration_std, energy_cv, articulation_to_speech_ratio
-     * **Agreeableness**: hnr_mean_db, jitter_local, shimmer_local, valence_proxy, pitch_variance
-     * **Neuroticism**: jitter_local, jitter_rap, shimmer_local, hnr_mean_db, long_pauses_count, energy_cv
-
-2. For **Motivation** (approximate):
-   - Label: "low", "moderate", or "high"
-   - Score range (e.g. "60–75")
-   - Key voice features: energy_mean, speaking_rate_wpm, pitch_slope, arousal_proxy, speech_to_silence_ratio
-
-3. For **Engagement** (approximate):
-   - Label: "low", "moderate", or "high"
-   - Score range
-   - Key voice features: energy_std, pitch_variance, arousal_proxy, spectral_flux_mean, voiced_ratio
-
-**IMPORTANT:**
-- All estimates are APPROXIMATE — label them clearly as such
-- Always cite the exact feature name and its value
-- These are voice-based indicators, not definitive psychological assessments
-- Consider the emotion timeline trends (rising/falling arousal and valence) in your reasoning
-
-=== OUTPUT FORMAT (JSON only) ===
-
-{{
-  "big5_approximate": {{
-    "openness": {{"label": "<label>", "score_range": "<range>", "influencing_features": ["feature=value (reason)", ...]}},
-    "conscientiousness": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
-    "extraversion": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
-    "agreeableness": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
-    "neuroticism": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}}
-  }},
-  "motivation_approximate": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}},
-  "engagement_approximate": {{"label": "<label>", "score_range": "<range>", "influencing_features": [...]}}
-}}
-
-Return ONLY the JSON, no additional text."""
-
-
 EMOTION_SUMMARY_BLOCK = """
-=== FUSED EMOTION SUMMARY (from dual-model analysis) ===
+=== EMOTION SUMMARY (MERaLiON-SER) ===
 
-Two independent emotion models (MERaLiON-SER and emotion2vec) analysed {total_segments} overlapping 8-second audio segments.
-Their outputs were fused using temperature-scaled weighted averaging (MERaLiON weight=0.65, emotion2vec weight=0.35).
+MERaLiON-SER analysed {total_segments} overlapping audio segments.
 
 {emotion_summary_json}
 
@@ -340,43 +309,6 @@ Their outputs were fused using temperature-scaled weighted averaging (MERaLiON w
 6. **Motivation**: Rising arousal_trend + positive valence_trend + high avg_confidence → higher motivation.
    Falling arousal + negative valence_trend → lower motivation.
 
-7. **Model agreement**: High model_agreement_rate (>0.6) increases confidence in emotion-based inferences.
-   Low agreement (<0.3) means emotion signals are ambiguous — reduce weight on emotion-based traits.
-
 **MANDATORY**: For every Big Five trait, cite at least one emotion summary metric alongside voice features.
 Example: "Neuroticism=35 — emotion_volatility=0.22 (stable), valence_mean=0.1 (slightly positive), arousal_std=0.15 (consistent)"
 """
-
-
-ABLATION_PROMPT = """You previously assessed this candidate using ONLY prosody and acoustic features (no emotion summary).
-Now you have access to the FUSED EMOTION SUMMARY below, derived from two independent emotion models.
-
-=== PREVIOUS ASSESSMENT (baseline, without emotion data) ===
-{baseline_json}
-
-=== FUSED EMOTION SUMMARY ===
-{emotion_summary_json}
-
-=== TASK ===
-Re-evaluate the Big Five scores considering the emotion summary.
-For each trait that CHANGED, explain:
-1. The old score and reasoning
-2. The new score and reasoning
-3. Which emotion metrics caused the change
-
-Return JSON:
-{{{{
-  "big_five_updated": {{{{
-    "openness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason citing emotion metrics>"}}}},
-    "conscientiousness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
-    "extraversion": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
-    "agreeableness": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}},
-    "neuroticism": {{{{"score": <0-100>, "confidence": <0-100>, "reason": "<reason>"}}}}
-  }}}},
-  "changes": [
-    {{{{"trait": "<trait>", "old_score": <N>, "new_score": <N>, "delta": <N>, "emotion_metrics_cited": ["<metric>=<value>", ...]}}}}
-  ],
-  "emotion_impact_summary": "<1-2 sentences on how emotion data improved the assessment>"
-}}}}
-
-Return ONLY the JSON."""

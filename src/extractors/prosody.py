@@ -338,8 +338,8 @@ class ProsodyExtractor:
 
             feat["jitter_local"] = round(float(call(point_proc, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)), 6)
             feat["jitter_rap"] = round(float(call(point_proc, "Get jitter (rap)", 0, 0, 0.0001, 0.02, 1.3)), 6)
-            feat["shimmer_local"] = round(float(call(point_proc, "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)), 6)
-            feat["shimmer_apq3"] = round(float(call(point_proc, "Get shimmer (apq3)", 0, 0, 0.0001, 0.02, 1.3, 1.6)), 6)
+            feat["shimmer_local"] = round(float(call([snd, point_proc], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)), 6)
+            feat["shimmer_apq3"] = round(float(call([snd, point_proc], "Get shimmer (apq3)", 0, 0, 0.0001, 0.02, 1.3, 1.6)), 6)
 
             harmonicity = call(snd, "To Harmonicity (cc)", 0.01, self.config.min_pitch, 0.1, 1.0)
             feat["hnr_mean_db"] = round(float(call(harmonicity, "Get mean", 0, 0)), 2)

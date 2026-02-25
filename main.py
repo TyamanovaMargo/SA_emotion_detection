@@ -16,26 +16,19 @@ Supports:
 import argparse
 import json
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import librosa
+import numpy as np
 from rich.console import Console
 from rich.table import Table
 
 from src.pipeline import HRAssessmentPipeline
 from src.config import load_config
-from src.models.schemas import HRAssessmentResult
+from src.models.schemas import HRAssessmentResult, VoiceFeatures
 from src.utils.reporting import generate_html_report
-from src.utils.comparison_report import (
-    extract_person_name,
-    analyze_person,
-    generate_comparison_html,
-    generate_comparison_json,
-)
-from src.utils.person_report import generate_person_aggregated_json
-from src.utils.feature_impact import generate_feature_impact
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
@@ -141,191 +134,75 @@ def process_single(
     html_report: bool = False,
     save: bool = True,
     quiet: bool = False,
-    skip_transcription: bool = False,
 ) -> HRAssessmentResult:
     """
     Process one audio file through the full pipeline.
 
-    If a transcript is provided, it is passed to the pipeline directly.
-    If skip_transcription is True and no transcript exists, the pipeline
-    runs in voice-only mode (no Whisper).
+    If a transcript is provided, it is used directly and Whisper transcription
+    is skipped. Voice features are still extracted from the audio.
     """
-    transcript_text = None
     if transcript_path and transcript_path.exists():
-        transcript_text = load_transcript(transcript_path)
+        transcript = load_transcript(transcript_path)
         console.print(f"  [dim]Transcript:[/dim] {transcript_path.name}")
 
-    result = pipeline.process(
-        audio_path=audio_path,
-        candidate_id=candidate_id,
-        position=position,
-        save_output=False,  # we handle saving ourselves
-        skip_transcription=skip_transcription and transcript_text is None,
-        transcript_text=transcript_text,
-    )
-    transcript = transcript_text or ""
+        # Extract voice features from audio
+        audio, sr = librosa.load(audio_path, sr=16000, mono=True)
+        duration = len(audio) / sr
+
+        prosody = pipeline.prosody_extractor.extract(
+            audio, sr, len(transcript.split()), duration
+        )
+        emotions = pipeline.emotion_detector.detect(audio, sr, duration)
+        egemaps = pipeline.egemaps_extractor.extract(audio, sr)
+        embedding_summary = pipeline._generate_embedding_summary(
+            prosody, emotions, egemaps
+        )
+
+        voice_features = VoiceFeatures(
+            emotions=emotions,
+            prosody=prosody,
+            acoustic_features=egemaps,
+            wavlm_embedding_summary=embedding_summary,
+        )
+
+        result = pipeline.process_transcript_only(
+            transcript=transcript,
+            voice_features=voice_features,
+            candidate_id=candidate_id,
+            position=position,
+        )
+    else:
+        # Full pipeline: transcribe + extract + assess
+        result = pipeline.process(
+            audio_path=audio_path,
+            candidate_id=candidate_id,
+            position=position,
+            save_output=False,  # we handle saving ourselves
+        )
+        transcript = ""
 
     # Save JSON report
     if save:
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         json_path = output_dir / f"{audio_path.stem}_{timestamp}_assessment.json"
-
-        # --- Build structured output ---
-        dual = result.dual_emotions or {}
-        timeline = result.emotion_timeline_rich or []
-
-        # Split dual timeline into per-model + fused timelines
-        e2v_timeline = []
-        mer_timeline = []
-        fused_timeline = []
-        comparison_segments = []
-        agree_count = 0
-        for seg in timeline:
-            base = {
-                "time_start": seg.get("time_start"),
-                "time_end": seg.get("time_end"),
-                "rms_energy": seg.get("rms_energy"),
-                "snr_db": seg.get("snr_db"),
-                "pitch_mean": seg.get("pitch_mean"),
-            }
-            e2v_timeline.append({
-                **base,
-                "emotion": seg.get("emotion2vec_emotion", "N/A"),
-                "confidence": seg.get("emotion2vec_confidence", 0),
-                "valence": seg.get("emotion2vec_valence", 0),
-                "arousal": seg.get("emotion2vec_arousal", 0),
-            })
-            mer_timeline.append({
-                **base,
-                "emotion": seg.get("meralion_emotion", "N/A"),
-                "confidence": seg.get("meralion_confidence", 0),
-                "valence": seg.get("meralion_valence", 0),
-                "arousal": seg.get("meralion_arousal", 0),
-            })
-            fused_timeline.append({
-                **base,
-                "emotion": seg.get("fused_emotion", "N/A"),
-                "confidence": seg.get("fused_confidence", 0),
-                "valence": seg.get("fused_valence", 0),
-                "arousal": seg.get("fused_arousal", 0),
-                "entropy": seg.get("entropy", 0),
-                "top2_gap": seg.get("top2_gap", 0),
-                "low_confidence": seg.get("low_confidence", False),
-            })
-            agree = seg.get("models_agree", False)
-            if agree:
-                agree_count += 1
-            comparison_segments.append({
-                "time": f"{seg.get('time_start', 0):.0f}–{seg.get('time_end', 0):.0f}s",
-                "emotion2vec": seg.get("emotion2vec_emotion", "N/A"),
-                "meralion_ser": seg.get("meralion_emotion", "N/A"),
-                "fused": seg.get("fused_emotion", "N/A"),
-                "agree": agree,
-                "low_confidence": seg.get("low_confidence", False),
-            })
-
-        agreement_rate = round(agree_count / len(timeline), 3) if timeline else None
-
-        # Voice features split
-        vf = result.voice_features.model_dump() if result.voice_features else {}
-
-        # Big Five as clean dict
-        b5 = {}
-        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
-            score_obj = getattr(result.big_five, trait)
-            b5[trait] = {"score": score_obj.score, "confidence": score_obj.confidence, "reason": score_obj.reason}
-
-        report = {
-            # ── 1. Candidate info ──
-            "candidate": {
-                "id": result.candidate_id,
-                "position": result.position,
-                "audio_file": str(audio_path),
-                "transcript_file": str(transcript_path) if transcript_path else None,
-                "timestamp": timestamp,
-            },
-
-            # ── 2. Transcript ──
-            "transcript": transcript or None,
-
-            # ── 3. Voice analysis ──
-            "voice_analysis": {
-                "prosody": vf.get("prosody"),
-                "acoustic_features": vf.get("acoustic_features"),
-                "embedding_summary": vf.get("wavlm_embedding_summary"),
-                "language": {
-                    "detected": vf.get("detected_language"),
-                    "confidence": vf.get("language_confidence"),
-                    "profile": vf.get("language_profile"),
-                },
-                "granular_features": result.granular_voice_features,
-            },
-
-            # ── 4. Emotion analysis — two models + fused ──
-            "emotion_analysis": {
-                "emotion2vec": {
-                    "overall": dual.get("emotion2vec"),
-                    "timeline": e2v_timeline,
-                },
-                "meralion_ser": {
-                    "overall": dual.get("meralion_ser"),
-                    "timeline": mer_timeline,
-                },
-                "fused": {
-                    "overall": dual.get("fused"),
-                    "timeline": fused_timeline,
-                },
-                "comparison": {
-                    "overall_agree": dual.get("models_agree"),
-                    "segment_agreement_rate": agreement_rate,
-                    "segments": comparison_segments,
-                },
-            },
-
-            # ── 5. Personality assessment (LLM) ──
-            "personality_assessment": {
-                "big_five": b5,
-                "strengths": result.trait_strengths,
-                "development_areas": result.personality_development_areas,
-            },
-
-            # ── 6. Motivation & engagement (LLM) ──
-            "motivation_engagement": {
-                "motivation": {
-                    "level": result.motivation.overall_level,
-                    "score": result.motivation.motivation_score,
-                    "pattern": result.motivation.pattern,
-                    "voice_indicators": result.motivation.voice_indicators,
-                    "content_indicators": result.motivation.content_indicators,
-                },
-                "engagement": {
-                    "level": result.engagement.overall_level,
-                    "score": result.engagement.engagement_score,
-                    "reason": result.engagement.reason,
-                },
-                "strengths": result.motivation_strengths,
-                "development_areas": result.motivation_development_areas,
-            },
-
-            # ── 7. Approximate voice-only assessment ──
-            "approximate_assessment": (
-                result.approximate_assessment.model_dump()
-                if result.approximate_assessment else None
-            ),
-
-            # ── 8. Emotion summary (fused, for LLM) ──
-            "emotion_summary": result.emotion_summary,
-
-            # ── 9. LLM ablation: baseline vs enriched ──
-            "llm_comparison": result.llm_comparison,
-
-            # ── 10. HR summary ──
-            "hr_summary": result.hr_summary,
-        }
-
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+            json.dump(
+                {
+                    "metadata": {
+                        "audio_file": str(audio_path),
+                        "transcript_file": str(transcript_path) if transcript_path else None,
+                        "candidate_id": result.candidate_id,
+                        "position": result.position,
+                        "timestamp": timestamp,
+                    },
+                    "transcript": transcript or None,
+                    "assessment": result.model_dump(exclude={"raw_response"}),
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
         if not quiet:
             console.print(f"  [green]JSON saved:[/green] {json_path}")
 
@@ -518,30 +395,10 @@ Examples:
         help="Group results by immediate parent folder (useful for per-person analysis)",
     )
     parser.add_argument(
-        "--group-by-person",
-        action="store_true",
-        help="Group results by person name extracted from filename (Name_Name_audio_N.ext)",
-    )
-    parser.add_argument(
         "--auto-transcript",
         action="store_true",
         default=True,
         help="Auto-detect transcript files next to audio files (default: True)",
-    )
-    parser.add_argument(
-        "--skip-transcription",
-        action="store_true",
-        help="Skip Whisper transcription — use voice features only (faster, no transcript needed)",
-    )
-    parser.add_argument(
-        "--dashboard",
-        action="store_true",
-        help="Launch Streamlit dashboard after processing to visualise results",
-    )
-    parser.add_argument(
-        "--feature-impact-report",
-        action="store_true",
-        help="Generate feature impact report showing how emotion features change Big Five scores",
     )
 
     args = parser.parse_args()
@@ -568,7 +425,6 @@ Examples:
             transcript_path = find_transcript_for_audio(args.input_path)
 
         console.print(f"\n[bold blue]Processing:[/bold blue] {args.input_path.name}")
-        start_time = time.time()
         try:
             result = process_single(
                 pipeline=pipeline,
@@ -580,17 +436,12 @@ Examples:
                 html_report=args.html_report,
                 save=not args.no_save,
                 quiet=args.quiet,
-                skip_transcription=args.skip_transcription,
             )
-            elapsed_time = time.time() - start_time
-            console.print(f"\n[green]✓ Processing completed in {elapsed_time:.2f}s[/green]")
             if not args.quiet:
                 pipeline.print_summary(result)
             sys.exit(0)
 
         except Exception as e:
-            elapsed_time = time.time() - start_time
-            console.print(f"\n[red]✗ Processing failed after {elapsed_time:.2f}s[/red]")
             console.print(f"[red]Error:[/red] {e}")
             if not args.quiet:
                 import traceback
@@ -613,7 +464,6 @@ Examples:
 
     all_results: List[Tuple[Path, HRAssessmentResult]] = []
     grouped_results: Dict[str, List[HRAssessmentResult]] = {}
-    person_results: Dict[str, List[Tuple[Path, HRAssessmentResult]]] = {}
     errors: List[Tuple[Path, str]] = []
 
     for i, audio_path in enumerate(audio_files, 1):
@@ -625,7 +475,6 @@ Examples:
 
         candidate_id = args.candidate_id or audio_path.stem
 
-        start_time = time.time()
         try:
             result = process_single(
                 pipeline=pipeline,
@@ -637,24 +486,15 @@ Examples:
                 html_report=args.html_report,
                 save=not args.no_save,
                 quiet=args.quiet,
-                skip_transcription=args.skip_transcription,
             )
-            elapsed_time = time.time() - start_time
-            console.print(f"  [green]✓ Completed in {elapsed_time:.2f}s[/green]")
-            
             all_results.append((audio_path, result))
 
             if args.group_by_folder:
                 group = audio_path.parent.name
                 grouped_results.setdefault(group, []).append(result)
 
-            # Always group by person for aggregated JSON generation
-            person = extract_person_name(audio_path.name)
-            person_results.setdefault(person, []).append((audio_path, result))
-
         except Exception as e:
-            elapsed_time = time.time() - start_time
-            console.print(f"  [red]✗ Failed after {elapsed_time:.2f}s - Error:[/red] {e}")
+            console.print(f"  [red]Error:[/red] {e}")
             errors.append((audio_path, str(e)))
 
     # Print batch summary table
@@ -664,46 +504,6 @@ Examples:
     # Generate per-group summaries
     if args.group_by_folder and grouped_results:
         generate_summary(grouped_results, args.output_dir)
-
-    # Always generate aggregated JSON per person (all recordings in one file)
-    if person_results:
-        console.print("\n[bold cyan]Generating aggregated JSON per person...[/bold cyan]")
-        generate_person_aggregated_json(person_results, args.output_dir)
-        console.print(f"[green]Aggregated JSONs saved to:[/green] {args.output_dir}")
-    
-    # Generate per-person comparison report (only if flag is set)
-    if args.group_by_person and person_results:
-        console.print("\n[bold cyan]Generating cross-recording comparison report...[/bold cyan]")
-        person_analyses = {}
-        for person_name, results_list in person_results.items():
-            person_analyses[person_name] = analyze_person(person_name, results_list)
-            console.print(f"  {person_name}: {len(results_list)} recordings, consistency={person_analyses[person_name]['overall_consistency']}")
-
-        # Save JSON
-        json_path = args.output_dir / "comparison_report.json"
-        generate_comparison_json(person_analyses, json_path)
-        console.print(f"[green]Comparison JSON:[/green] {json_path}")
-
-        # Save HTML
-        html_path = args.output_dir / "comparison_report.html"
-        generate_comparison_html(person_analyses, html_path)
-        console.print(f"[green]Comparison HTML:[/green] {html_path}")
-
-    # Generate feature impact report (how emotion features change Big Five)
-    if args.feature_impact_report or args.group_by_person:
-        console.print("\n[bold cyan]Generating feature impact report...[/bold cyan]")
-        try:
-            impact_report = generate_feature_impact(args.output_dir)
-            n_recs = impact_report.get("records_count", 0)
-            if n_recs > 0:
-                console.print(f"[green]Feature impact report:[/green] {n_recs} recordings analyzed")
-                console.print(f"  JSON: {args.output_dir / 'feature_impact_report.json'}")
-                console.print(f"  CSV:  {args.output_dir / 'feature_impact_summary.csv'}")
-                console.print(f"  HTML: {args.output_dir / 'feature_impact_report.html'}")
-            else:
-                console.print("[yellow]No ablation data found — run with emotion features enabled[/yellow]")
-        except Exception as e:
-            console.print(f"[red]Feature impact report failed:[/red] {e}")
 
     # Print errors
     if errors:
@@ -715,18 +515,6 @@ Examples:
         f"\n[bold green]Done:[/bold green] {len(all_results)}/{len(audio_files)} processed"
     )
     console.print(f"[bold]Output:[/bold] {args.output_dir}")
-
-    # Launch Streamlit dashboard if requested
-    if args.dashboard:
-        import subprocess
-        dashboard_script = Path(__file__).parent / "src" / "utils" / "dashboard.py"
-        if dashboard_script.exists():
-            console.print("\n[bold cyan]Launching dashboard...[/bold cyan]")
-            subprocess.Popen(
-                [sys.executable, "-m", "streamlit", "run", str(dashboard_script), "--", str(args.output_dir)],
-            )
-        else:
-            console.print(f"[red]Dashboard script not found:[/red] {dashboard_script}")
 
     sys.exit(0 if not errors else 1)
 

@@ -10,7 +10,6 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from .config import PipelineConfig, load_config
-from .utils.audio_preprocess import preprocess as preprocess_audio
 from .models.schemas import (
     VoiceFeatures,
     HRAssessmentInput,
@@ -30,55 +29,55 @@ console = Console()
 
 class HRAssessmentPipeline:
     """
-    HR personality and motivation assessment pipeline.
-
-    1. Language detection (Whisper, lightweight)
-    2. Optional transcription (Whisper)
-    3. Prosody extraction (pitch, energy, pauses)
-    4. Emotion detection (MERaLiON-SER)
-    5. Acoustic feature extraction (eGeMAPS)
-    6. LLM assessment (Groq) → Big Five + motivation + engagement
+    Complete HR personality and motivation assessment pipeline.
+    
+    Processes audio files through:
+    1. Speech-to-text transcription (Whisper)
+    2. Prosody extraction (pitch, energy, pauses)
+    3. Emotion detection (emotion2vec)
+    4. Acoustic feature extraction (eGeMAPS)
+    5. Claude-based HR assessment
     """
-
+    
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or load_config()
-
+        
         self._transcriber: Optional[WhisperTranscriber] = None
         self._prosody_extractor: Optional[ProsodyExtractor] = None
         self._emotion_detector: Optional[EmotionDetector] = None
         self._egemaps_extractor: Optional[EgemapsExtractor] = None
         self._assessor: Optional[GroqHRAssessor] = None
-
+    
     @property
     def transcriber(self) -> WhisperTranscriber:
         if self._transcriber is None:
             self._transcriber = WhisperTranscriber(self.config.whisper)
         return self._transcriber
-
+    
     @property
     def prosody_extractor(self) -> ProsodyExtractor:
         if self._prosody_extractor is None:
             self._prosody_extractor = ProsodyExtractor(self.config.prosody)
         return self._prosody_extractor
-
+    
     @property
     def emotion_detector(self) -> EmotionDetector:
         if self._emotion_detector is None:
             self._emotion_detector = EmotionDetector(self.config.emotion)
         return self._emotion_detector
-
+    
     @property
     def egemaps_extractor(self) -> EgemapsExtractor:
         if self._egemaps_extractor is None:
             self._egemaps_extractor = EgemapsExtractor(self.config.egemaps)
         return self._egemaps_extractor
-
+    
     @property
     def assessor(self) -> GroqHRAssessor:
         if self._assessor is None:
             self._assessor = GroqHRAssessor(self.config.groq, self.config.motivation)
         return self._assessor
-
+    
     def process(
         self,
         audio_path: Union[str, Path],
@@ -87,17 +86,28 @@ class HRAssessmentPipeline:
         save_output: bool = True,
         skip_transcription: bool = False,
         transcript_text: Optional[str] = None,
-        preprocess: bool = False,
-        notch_hz: Optional[float] = None,
     ) -> HRAssessmentResult:
-        """Process an audio file through the complete pipeline."""
+        """
+        Process an audio file through the complete pipeline.
+        
+        Args:
+            audio_path: Path to the audio file
+            candidate_id: Optional candidate identifier
+            position: Optional position being applied for
+            save_output: Whether to save results to file
+            skip_transcription: Skip Whisper transcription (voice-only mode)
+            transcript_text: Pre-existing transcript text to use instead of Whisper
+            
+        Returns:
+            HRAssessmentResult with complete analysis
+        """
         audio_path = Path(audio_path)
-
+        
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
-
+        
         console.print(f"\n[bold blue]Processing:[/bold blue] {audio_path.name}")
-
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -105,21 +115,9 @@ class HRAssessmentPipeline:
         ) as progress:
             task = progress.add_task("Loading audio...", total=None)
             audio, sample_rate = self._load_audio(audio_path)
-
-            # Optional lightweight preprocessing
-            if preprocess:
-                progress.update(task, description="Preprocessing audio (HPF + denoise + normalise)...")
-                audio, sample_rate = preprocess_audio(
-                    audio, sample_rate,
-                    notch_hz=notch_hz,
-                    noise_reduce_db=4.0,
-                    trim_silence=True,
-                )
-                console.print("  [dim]Preprocessed: HPF 80Hz + spectral denoise (4dB) + peak normalise[/dim]")
-
             duration = len(audio) / sample_rate
-
-            # Language detection
+            
+            # Detect language/accent (works even in skip-transcription mode)
             progress.update(task, description="Detecting language...")
             try:
                 detected_lang, lang_confidence, language_profile = self.transcriber.detect_language(audio, sample_rate)
@@ -129,56 +127,65 @@ class HRAssessmentPipeline:
                 detected_lang = "unknown"
                 lang_confidence = 0.0
                 language_profile = "non_native_english"
-
-            # Transcription
+            
             if transcript_text:
                 from .models.schemas import TranscriptionResult
                 transcription = TranscriptionResult(
-                    text=transcript_text, segments=[], language="unknown",
+                    text=transcript_text,
+                    segments=[],
+                    language="unknown",
                     word_count=len(transcript_text.split()),
-                    duration_seconds=duration, filler_words={}, filler_word_rate=0.0,
+                    duration_seconds=duration,
+                    filler_words={},
+                    filler_word_rate=0.0,
                 )
                 console.print("  [dim]Using provided transcript[/dim]")
             elif skip_transcription:
                 from .models.schemas import TranscriptionResult
                 transcription = TranscriptionResult(
-                    text="", segments=[], language="unknown",
-                    word_count=0, duration_seconds=duration,
-                    filler_words={}, filler_word_rate=0.0,
+                    text="",
+                    segments=[],
+                    language="unknown",
+                    word_count=0,
+                    duration_seconds=duration,
+                    filler_words={},
+                    filler_word_rate=0.0,
                 )
                 console.print("  [dim]Skipping transcription (voice-only mode)[/dim]")
             else:
                 progress.update(task, description="Transcribing speech...")
                 transcription = self.transcriber.transcribe(audio, sample_rate, duration)
-
-            # Prosody
+            
             progress.update(task, description="Extracting prosody features...")
             prosody = self.prosody_extractor.extract(
                 audio, sample_rate, transcription.word_count, duration
             )
-
-            # Free Whisper GPU before loading emotion model
+            
+            # Free Whisper GPU memory before loading emotion model
             if self._transcriber is not None:
-                if self.config.whisper.device.startswith("cuda"):
-                    console.print(f"  [dim]Unloading Whisper from {self.config.whisper.device} to free GPU memory[/dim]")
+                whisper_dev = self.config.whisper.device
+                emotion_dev = self.config.emotion.device
+                # Always unload to free memory, especially if sharing GPU
+                if whisper_dev.startswith("cuda"):
+                    console.print(f"  [dim]Unloading Whisper from {whisper_dev} to free GPU memory[/dim]")
                     self._transcriber.unload_model()
-
-            # Emotion (MERaLiON-SER)
-            progress.update(task, description="Detecting emotions (MERaLiON-SER)...")
+            
+            progress.update(task, description="Detecting emotions...")
             emotions = self.emotion_detector.detect(audio, sample_rate, duration)
-
+            
+            # Build emotion timeline for detailed emotion analysis
             progress.update(task, description="Building emotion timeline...")
             emotion_timeline = self.emotion_detector.detect_timeline(audio, sample_rate)
             emotions.emotion_timeline = emotion_timeline
-
-            # eGeMAPS acoustic features
+            
             progress.update(task, description="Extracting acoustic features...")
             egemaps = self.egemaps_extractor.extract(audio, sample_rate)
-
-            # Voice profile summary
+            
             progress.update(task, description="Generating voice profile summary...")
-            embedding_summary = self._generate_embedding_summary(prosody, emotions, egemaps)
-
+            embedding_summary = self._generate_embedding_summary(
+                prosody, emotions, egemaps
+            )
+            
             voice_features = VoiceFeatures(
                 emotions=emotions,
                 prosody=prosody,
@@ -188,17 +195,28 @@ class HRAssessmentPipeline:
                 language_confidence=round(lang_confidence, 3),
                 language_profile=language_profile,
             )
-
-            # Granular features
+            
+            # Extract granular voice features for dashboard & approximate assessment
             progress.update(task, description="Extracting granular voice features...")
             granular_features = self.prosody_extractor.extract_granular(
                 audio, sample_rate, transcription.word_count, duration
             )
 
-            # Build emotion summary for LLM
-            emotion_summary = self._build_emotion_summary(emotions, emotion_timeline)
+            # Dual-model emotion comparison (MERaLiON-SER + emotion2vec)
+            progress.update(task, description="Running dual-model emotion comparison...")
+            dual_emotions = self.emotion_detector.detect_dual(audio, sample_rate, duration)
 
-            # LLM assessment
+            # Build rich emotion timeline with fusion, SNR, smoothing
+            progress.update(task, description="Building fused emotion timeline...")
+            emotion_timeline_rich = self.emotion_detector.detect_emotion_timeline_dual(
+                audio, sample_rate, segment_duration=8.0, hop_duration=4.0,
+            )
+
+            # Compute emotion summary for LLM
+            progress.update(task, description="Computing emotion summary...")
+            from .extractors.emotion_fusion import compute_emotion_summary
+            emotion_summary = compute_emotion_summary(emotion_timeline_rich)
+
             progress.update(task, description="Running HR assessment with Groq LLM...")
             assessment_input = HRAssessmentInput(
                 transcript=transcription.text,
@@ -208,66 +226,37 @@ class HRAssessmentPipeline:
                 position=position,
                 language_profile=language_profile,
             )
-
+            
             result = self.assessor.assess(assessment_input, emotion_summary=emotion_summary)
 
-            # Attach extra data
-            result.transcript = transcription.text or None
+            # Get approximate assessment from granular features
+            progress.update(task, description="Getting approximate voice-based assessment...")
+            approx = self.assessor.assess_approximate(granular_features, emotion_timeline_rich)
+
+            # Run ablation: baseline (no emotion summary) vs enriched
+            progress.update(task, description="Running emotion ablation comparison...")
+            try:
+                llm_comparison = self.assessor.assess_with_ablation(
+                    assessment_input, emotion_summary
+                )
+            except Exception as e:
+                print(f"  [warn] ablation failed: {e}")
+                llm_comparison = None
+
+            # Attach new data to result
             result.granular_voice_features = granular_features
-            result.emotion_timeline_rich = emotion_timeline
+            result.emotion_timeline_rich = emotion_timeline_rich
+            result.approximate_assessment = approx
+            result.dual_emotions = dual_emotions
             result.emotion_summary = emotion_summary
-
+            result.llm_comparison = llm_comparison
+            
             progress.update(task, description="Complete!")
-
+        
         if save_output:
             self._save_result(result, audio_path, transcription.text)
-
+        
         return result
-
-    def _build_emotion_summary(self, emotions, timeline) -> dict:
-        """Build emotion summary from timeline for LLM consumption."""
-        if not timeline:
-            return {"dominant_emotion": emotions.primary_emotion, "error": "no_timeline"}
-
-        from collections import Counter
-        emos = [s["emotion"] for s in timeline if s.get("emotion") not in ("undetected", "low_snr")]
-        if not emos:
-            return {"dominant_emotion": "neutral", "error": "all_filtered"}
-
-        counter = Counter(emos)
-        total = len(emos)
-        dominant = counter.most_common(1)[0][0]
-
-        valences = [s["valence"] for s in timeline if s.get("emotion") not in ("undetected",)]
-        arousals = [s["arousal"] for s in timeline if s.get("emotion") not in ("undetected",)]
-
-        transitions = sum(1 for i in range(1, len(emos)) if emos[i] != emos[i-1])
-        volatility = round(transitions / max(len(emos) - 1, 1), 3)
-
-        def _trend(vals):
-            if len(vals) < 2:
-                return "stable"
-            half = len(vals) // 2
-            d = np.mean(vals[half:]) - np.mean(vals[:half])
-            if d > 0.1: return "rising"
-            if d < -0.1: return "falling"
-            return "stable"
-
-        return {
-            "dominant_emotion": dominant,
-            "dominant_emotion_ratio": round(counter[dominant] / total, 3),
-            "emotion_distribution": dict(counter),
-            "emotion_volatility": volatility,
-            "valence_mean": round(float(np.mean(valences)), 3) if valences else 0,
-            "valence_std": round(float(np.std(valences)), 3) if valences else 0,
-            "valence_trend": _trend(valences),
-            "arousal_mean": round(float(np.mean(arousals)), 3) if arousals else 0,
-            "arousal_std": round(float(np.std(arousals)), 3) if arousals else 0,
-            "arousal_trend": _trend(arousals),
-            "neutral_ratio": round(counter.get("neutral", 0) / total, 3),
-            "avg_confidence": round(float(np.mean([s["confidence"] for s in timeline])), 3),
-            "segments_count": total,
-        }
     
     def process_transcript_only(
         self,
@@ -402,20 +391,72 @@ class HRAssessmentPipeline:
         console.print("\n" + "=" * 60)
         console.print("[bold cyan]HR ASSESSMENT SUMMARY[/bold cyan]")
         console.print("=" * 60)
-
+        
         if result.candidate_id:
             console.print(f"[bold]Candidate:[/bold] {result.candidate_id}")
         if result.position:
             console.print(f"[bold]Position:[/bold] {result.position}")
+        
+        # --- Dual-model emotion comparison ---
+        dual = result.dual_emotions
+        if dual:
+            console.print("\n[bold yellow]Emotion Detection (2 models):[/bold yellow]")
+            e2v = dual.get("emotion2vec", {})
+            mer = dual.get("meralion_ser", {})
 
-        # Emotion summary
+            e2v_emo = e2v.get("primary_emotion", "N/A")
+            e2v_conf = e2v.get("confidence", 0)
+            mer_emo = mer.get("primary_emotion", "N/A")
+            mer_conf = mer.get("confidence", 0)
+
+            console.print(f"  {'emotion2vec':18} {e2v_emo:>12}  ({e2v_conf:.1%} conf)")
+            console.print(f"  {'MERaLiON-SER':18} {mer_emo:>12}  ({mer_conf:.1%} conf)")
+
+            agree = dual.get("models_agree")
+            if agree is True:
+                console.print("  [green]✓ Models AGREE[/green]")
+            elif agree is False:
+                console.print("  [yellow]⚠ Models DISAGREE[/yellow]")
+            else:
+                console.print("  [dim]One model unavailable[/dim]")
+
+            # Per-segment agreement rate
+            timeline = result.emotion_timeline_rich or []
+            if timeline:
+                n_agree = sum(1 for s in timeline if s.get("models_agree"))
+                rate = n_agree / len(timeline)
+                console.print(f"  Segment agreement: {n_agree}/{len(timeline)} ({rate:.0%})")
+
+            # Fused result
+            fused = dual.get("fused", {})
+            if fused:
+                f_emo = fused.get("primary_emotion", "N/A")
+                f_conf = fused.get("confidence", 0)
+                f_ent = fused.get("entropy", 0)
+                console.print(f"  {'Fused':18} {f_emo:>12}  ({f_conf:.1%} conf, entropy={f_ent:.2f})")
+
+        # --- Emotion summary ---
         emo_sum = result.emotion_summary
         if emo_sum and not emo_sum.get("error"):
-            console.print("\n[bold yellow]Emotion Summary (MERaLiON-SER):[/bold yellow]")
+            console.print("\n[bold yellow]Emotion Summary (fused):[/bold yellow]")
             console.print(f"  Dominant: {emo_sum.get('dominant_emotion', '?')} ({emo_sum.get('dominant_emotion_ratio', 0):.0%})")
             console.print(f"  Volatility: {emo_sum.get('emotion_volatility', 0):.2f}  |  Neutral ratio: {emo_sum.get('neutral_ratio', 0):.2f}")
             console.print(f"  Valence: mean={emo_sum.get('valence_mean', 0):.2f} std={emo_sum.get('valence_std', 0):.2f} trend={emo_sum.get('valence_trend', '?')}")
-            console.print(f"  Arousal: mean={emo_sum.get('arousal_mean', 0):.2f} std={emo_sum.get('arousal_std', 0):.2f} trend={emo_sum.get('arousal_trend', '?')}")
+            console.print(f"  Arousal:  mean={emo_sum.get('arousal_mean', 0):.2f} std={emo_sum.get('arousal_std', 0):.2f} trend={emo_sum.get('arousal_trend', '?')}")
+            if emo_sum.get("model_agreement_rate") is not None:
+                console.print(f"  Model agreement: {emo_sum['model_agreement_rate']:.0%}  |  Avg confidence: {emo_sum.get('avg_confidence', 0):.2f}")
+
+        # --- Ablation deltas ---
+        ablation = result.llm_comparison
+        if ablation and ablation.get("changes"):
+            console.print("\n[bold yellow]Emotion Impact on Big Five (ablation):[/bold yellow]")
+            for ch in ablation["changes"]:
+                delta = ch.get("delta", 0)
+                arrow = "[green]↑[/green]" if delta > 0 else "[red]↓[/red]"
+                console.print(f"  {ch['trait'].capitalize():18} {ch.get('old_score','?')} → {ch.get('new_score','?')} ({arrow}{abs(delta)})")
+            impact = ablation.get("emotion_impact_summary", "")
+            if impact:
+                console.print(f"  [dim]{impact}[/dim]")
 
         console.print("\n[bold yellow]Big Five Personality Profile:[/bold yellow]")
         for trait in ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"]:

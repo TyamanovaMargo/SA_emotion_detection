@@ -36,7 +36,6 @@ team_reports_lightweight/
 # Cache
 .cache/
 *.cache
-.model_cache/
 
 # Logs
 *.log

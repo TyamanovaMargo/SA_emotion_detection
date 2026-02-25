@@ -5,17 +5,16 @@ audioread>=3.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 
-# Speech-to-text (distil-whisper via transformers + whisper-base for language detection)
+# Speech-to-text (Whisper for transcription + language detection)
 openai-whisper>=20231117
 accelerate>=0.25.0
 
-# Machine learning & embeddings
+# Machine learning & MERaLiON-SER
 torch>=2.0.0
 torchaudio>=2.0.0
 transformers>=4.35.0
-
-# Emotion detection
-funasr>=1.0.0
+peft>=0.7.0
+omegaconf>=2.3.0
 
 # Acoustic features (eGeMAPS)
 opensmile>=2.5.0
@@ -31,15 +30,3 @@ tqdm>=4.66.0
 
 # Voice quality features (jitter, shimmer, HNR)
 praat-parselmouth>=0.4.3
-
-# MERaLiON-SER dependencies
-peft>=0.7.0
-
-# Dashboard
-streamlit>=1.30.0
-plotly>=5.18.0
-
-# Optional: for API server
-fastapi>=0.109.0
-uvicorn>=0.27.0
-python-multipart>=0.0.6
