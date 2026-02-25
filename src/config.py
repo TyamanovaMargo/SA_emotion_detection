@@ -1,4 +1,4 @@
-"""Configuration settings for the HR assessment pipeline."""
+"""Configuration settings for the slim voice feature extraction pipeline."""
 
 import os
 from pathlib import Path
@@ -7,20 +7,6 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
-class WhisperConfig(BaseModel):
-    """Whisper transcription configuration."""
-    model_name: str = Field(default="distil-whisper/distil-large-v3", description="Whisper model name (HuggingFace model ID)")
-    language: Optional[str] = Field(default=None, description="Language code or None for auto-detect")
-    device: str = Field(
-        default_factory=lambda: os.getenv("WHISPER_DEVICE", "auto"),
-        description="Device to run on (cpu/cuda/cuda:0/cuda:1/mps/auto)"
-    )
-    gpu_index: int = Field(
-        default_factory=lambda: int(os.getenv("WHISPER_GPU", "0")),
-        description="GPU index for Whisper model"
-    )
 
 
 class EmotionConfig(BaseModel):
@@ -34,7 +20,7 @@ class EmotionConfig(BaseModel):
         description="Device to run on (cpu/cuda/cuda:0/cuda:1/mps/auto)"
     )
     gpu_index: int = Field(
-        default_factory=lambda: int(os.getenv("EMOTION_GPU", "1")),
+        default_factory=lambda: int(os.getenv("EMOTION_GPU", "0")),
         description="GPU index for emotion model"
     )
     batch_size: int = Field(
@@ -73,29 +59,19 @@ class EgemapsConfig(BaseModel):
     feature_level: str = Field(default="Functionals", description="Feature level")
 
 
-class GroqConfig(BaseModel):
-    """Groq API configuration."""
-    api_key: str = Field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
-    model: str = Field(default="llama-3.3-70b-versatile", description="Groq model to use")
-    max_tokens: int = Field(default=4096, description="Maximum tokens in response")
-    temperature: float = Field(default=0.0, description="Temperature for generation (0.0 for deterministic)")
-
-
 class MotivationConfig(BaseModel):
     """Motivation scoring configuration."""
     language_profile: str = Field(
         default_factory=lambda: os.getenv("LANGUAGE_PROFILE", "non_native_english"),
-        description="Language profile: 'native_english' or 'non_native_english'"
+        description="Language profile: 'non_native_english', 'native_english', or 'sea_english'"
     )
 
 
 class PipelineConfig(BaseModel):
-    """Main pipeline configuration."""
-    whisper: WhisperConfig = Field(default_factory=WhisperConfig)
+    """Slim pipeline configuration."""
     emotion: EmotionConfig = Field(default_factory=EmotionConfig)
     prosody: ProsodyConfig = Field(default_factory=ProsodyConfig)
     egemaps: EgemapsConfig = Field(default_factory=EgemapsConfig)
-    groq: GroqConfig = Field(default_factory=GroqConfig)
     motivation: MotivationConfig = Field(default_factory=MotivationConfig)
     
     output_dir: Path = Field(default=Path("./outputs"), description="Output directory")

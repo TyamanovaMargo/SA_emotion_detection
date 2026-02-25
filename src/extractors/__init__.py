@@ -1,13 +1,11 @@
-"""Feature extraction modules."""
+"""Feature extraction modules (slim — no transcription)."""
 
-from .transcription import WhisperTranscriber
 from .prosody import ProsodyExtractor
 from .emotion_meralion import EmotionDetector
 from .egemaps import EgemapsExtractor
 from .voice_analyzer import VoiceAnalyzer
 
 __all__ = [
-    "WhisperTranscriber",
     "ProsodyExtractor",
     "EmotionDetector",
     "EgemapsExtractor",

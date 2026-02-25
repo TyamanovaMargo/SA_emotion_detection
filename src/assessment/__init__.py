@@ -1,9 +1,7 @@
-"""HR Assessment modules."""
+"""Assessment modules (slim — deterministic scoring only)."""
 
-from .groq_assessor import GroqHRAssessor
-from .prompt_templates import HR_ASSESSMENT_PROMPT
+from .motivation_scorer import MotivationScorer
 
 __all__ = [
-    "GroqHRAssessor",
-    "HR_ASSESSMENT_PROMPT",
+    "MotivationScorer",
 ]

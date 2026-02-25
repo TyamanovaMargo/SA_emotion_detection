@@ -1,251 +1,181 @@
 """
-FastAPI server for HR Assessment Pipeline.
+Slim Voice Feature Extraction API — FastAPI server.
 
-Run with: uvicorn api:app --reload
+Endpoints:
+    POST /assess       — upload audio file, get full feature extraction JSON
+    GET  /health       — health check + model status
+    POST /assess/batch — upload multiple files
+
+Usage:
+    python api.py                        # default: 0.0.0.0:8000
+    python api.py --port 8080            # custom port
+    python api.py --host 127.0.0.1      # localhost only
 """
 
-import tempfile
 import os
+import time
+import argparse
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
-from src.pipeline import HRAssessmentPipeline
+from slim_pipeline import SlimPipeline
 from src.config import load_config
-from src.models.schemas import HRAssessmentResult
-from src.utils.reporting import generate_html_report
-from src.utils.scoring import (
-    score_to_label,
-    validate_strengths_and_dev_areas,
-    compute_final_assessment,
-    generate_hr_summary_from_scores,
-    compute_content_voice_alignment,
-)
+
+# ── Singleton pipeline (load model once, reuse across requests) ──
+_pipeline: Optional[SlimPipeline] = None
+
+
+def get_pipeline() -> SlimPipeline:
+    global _pipeline
+    if _pipeline is None:
+        config = load_config()
+        _pipeline = SlimPipeline(config)
+        # Warm up: load MERaLiON model into GPU memory
+        _pipeline.emotion_detector._load_model()
+    return _pipeline
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-load models on server start so first request is fast."""
+    get_pipeline()
+    yield
 
 
 app = FastAPI(
-    title="HR Voice Assessment API",
-    description="Analyze candidate personality and motivation from voice recordings",
+    title="Slim Voice Feature Extraction API",
+    description="Extract acoustic, prosodic, and emotion features from audio. No LLM, no transcription.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-pipeline: Optional[HRAssessmentPipeline] = None
+# ── Health check ──
 
-
-def get_pipeline() -> HRAssessmentPipeline:
-    """Get or create the pipeline instance."""
-    global pipeline
-    if pipeline is None:
-        config = load_config()
-        pipeline = HRAssessmentPipeline(config)
-    return pipeline
-
-
-class AssessmentResponse(BaseModel):
-    """API response model — mirrors the full JSON report from main.py."""
-    success: bool
-    candidate_id: Optional[str] = None
-    position: Optional[str] = None
-    personality_assessment: dict
-    final_assessment: dict
-    motivation_engagement: dict
-    emotion_summary: Optional[dict] = None
-    voice_analysis: Optional[dict] = None
-    hr_summary: str
-    pipeline_metadata: Optional[dict] = None
-
-
-@app.get("/")
-async def root():
-    """API root endpoint."""
+@app.get("/health")
+async def health():
+    pipe = get_pipeline()
+    model_loaded = pipe.emotion_detector._model is not None
+    device = pipe.emotion_detector.config.device
     return {
-        "name": "HR Voice Assessment API",
-        "version": "1.0.0",
-        "endpoints": {
-            "POST /assess": "Upload audio file for assessment",
-            "GET /health": "Health check",
-        }
+        "status": "ok",
+        "pipeline": "slim",
+        "model_loaded": model_loaded,
+        "device": device,
+        "model": pipe.emotion_detector.config.meralion_model,
     }
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+# ── Main assessment endpoint ──
 
-
-@app.post("/assess", response_model=AssessmentResponse)
-async def assess_candidate(
-    audio: UploadFile = File(..., description="Audio file (WAV, MP3, etc.)"),
-    candidate_id: Optional[str] = Form(None, description="Candidate identifier"),
-    position: Optional[str] = Form(None, description="Position being applied for"),
+@app.post("/assess")
+async def assess(
+    audio: UploadFile = File(..., description="Audio file (.wav, .mp3, .m4a, .webm, .ogg, .flac)"),
+    language_profile: str = Form(default="non_native_english", description="Language profile for scoring"),
 ):
     """
-    Assess a candidate from their voice recording.
-    
-    Upload an audio file containing the candidate's speech (e.g., interview response)
-    and receive a comprehensive personality and motivation assessment.
+    Extract all voice features from uploaded audio file.
+
+    Returns JSON with:
+    - prosody (pitch, energy, pauses, rhythm, speaking rate)
+    - voice_quality (HNR, jitter, shimmer)
+    - spectral (MFCC)
+    - egemaps (88 acoustic features)
+    - emotion_timeline (MERaLiON-SER per-segment emotions + VAD)
+    - emotion_aggregates (dominant emotion, valence/arousal stats, arc type)
+    - motivation_engagement (deterministic score + components)
+    - l2_adjustments
+    - paralinguistic_summary
     """
-    allowed_extensions = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
-    file_ext = Path(audio.filename).suffix.lower()
-    
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported audio format. Allowed: {', '.join(allowed_extensions)}"
-        )
-    
-    with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
+    allowed_ext = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac"}
+    suffix = Path(audio.filename).suffix.lower() if audio.filename else ".wav"
+    if suffix not in allowed_ext:
+        raise HTTPException(400, f"Unsupported format: {suffix}. Allowed: {allowed_ext}")
+
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         content = await audio.read()
         tmp.write(content)
         tmp_path = tmp.name
-    
+
     try:
         pipe = get_pipeline()
+        t0 = time.time()
         result = pipe.process(
-            audio_path=Path(tmp_path),
-            candidate_id=candidate_id,
-            position=position,
-            save_output=False,
+            audio_path=tmp_path,
+            language_profile=language_profile,
+            output_dir=None,  # don't save to disk
         )
-
-        # Build full report (same logic as main.py process_single)
-        va = result.voice_analysis or {}
-        b5 = {}
-        for trait in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"):
-            s = getattr(result.big_five, trait)
-            b5[trait] = {"score": s.score, "confidence": s.confidence, "reason": s.reason}
-
-        l2_adj = va.get("l2_adjustments")
-
-        approx_b5_raw = None
-        if result.approximate_assessment:
-            approx_b5_raw = result.approximate_assessment.model_dump().get("big5_approximate", {})
-        enriched_b5 = None
-        if result.llm_comparison and isinstance(result.llm_comparison, dict):
-            enriched_b5 = result.llm_comparison.get("enriched_big5", {})
-
-        final_assessment = compute_final_assessment(b5, approx_b5_raw, enriched_b5)
-
-        # Apply L2 adjustments to final scores
-        if l2_adj:
-            b5_adj = l2_adj.get("big5_adjustments", {})
-            traits_fa = final_assessment.get("traits", {})
-            for t_name, delta in b5_adj.items():
-                if t_name in traits_fa and isinstance(delta, (int, float)):
-                    old = traits_fa[t_name]["score"]
-                    traits_fa[t_name]["score"] = max(0, min(100, old + delta))
-                    traits_fa[t_name]["label"] = score_to_label(traits_fa[t_name]["score"])
-                    traits_fa[t_name]["l2_delta"] = delta
-
-        # Validated strengths from final scores
-        fa_b5 = {t: {"score": final_assessment.get("traits", {}).get(t, {}).get("score", 50)}
-                 for t in b5}
-        strengths, dev_areas = validate_strengths_and_dev_areas(
-            fa_b5, result.trait_strengths, result.personality_development_areas)
-
-        emo_summary = result.emotion_summary or {}
-        dominant_emo = emo_summary.get("dominant_emotion", "neutral")
-        if l2_adj and dominant_emo == "sad":
-            dominant_emo = "subdued/neutral"
-
-        mot_score = result.motivation.motivation_score
-        eng_score = result.engagement.engagement_score if result.engagement else None
-        hr_summary = generate_hr_summary_from_scores(
-            final_assessment, mot_score, eng_score, dominant_emo)
-
-        return AssessmentResponse(
-            success=True,
-            candidate_id=result.candidate_id,
-            position=result.position,
-            personality_assessment={"big_five": b5, "strengths": strengths, "development_areas": dev_areas},
-            final_assessment=final_assessment,
-            motivation_engagement={
-                "motivation": {
-                    "level": result.motivation.overall_level,
-                    "score": mot_score,
-                    "pattern": result.motivation.pattern,
-                    "voice_indicators": result.motivation.voice_indicators,
-                },
-                "engagement": {
-                    "level": result.engagement.overall_level,
-                    "score": eng_score,
-                    "reason": result.engagement.reason,
-                },
-            },
-            emotion_summary=emo_summary,
-            voice_analysis={
-                "prosody": va.get("prosody"),
-                "voice_quality": va.get("voice_quality"),
-                "emotion_aggregates": va.get("emotion_aggregates"),
-                "l2_adjustments": l2_adj,
-            },
-            hr_summary=hr_summary,
-            pipeline_metadata={"pipeline_version": "2.0.0", "processing_date": datetime.now().isoformat()},
-        )
-
+        result["processing_time_seconds"] = round(time.time() - t0, 2)
+        result["audio_file"] = audio.filename or "uploaded_audio"
+        return JSONResponse(content=result)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(500, f"Processing failed: {str(e)}")
     finally:
         os.unlink(tmp_path)
 
 
-@app.post("/assess/html", response_class=HTMLResponse)
-async def assess_candidate_html(
-    audio: UploadFile = File(...),
-    candidate_id: Optional[str] = Form(None),
-    position: Optional[str] = Form(None),
+# ── Batch endpoint ──
+
+@app.post("/assess/batch")
+async def assess_batch(
+    files: list[UploadFile] = File(..., description="Multiple audio files"),
+    language_profile: str = Form(default="non_native_english"),
 ):
-    """
-    Assess a candidate and return an HTML report.
-    """
-    allowed_extensions = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
-    file_ext = Path(audio.filename).suffix.lower()
-    
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported audio format. Allowed: {', '.join(allowed_extensions)}"
-        )
-    
-    with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
-        content = await audio.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-    
-    try:
-        pipe = get_pipeline()
-        result = pipe.process(
-            audio_path=Path(tmp_path),
-            candidate_id=candidate_id,
-            position=position,
-            save_output=False,
-        )
-        
-        html = generate_html_report(result)
-        return HTMLResponse(content=html)
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    finally:
-        os.unlink(tmp_path)
+    """Process multiple audio files and return results array."""
+    results = []
+    errors = []
+
+    for audio in files:
+        suffix = Path(audio.filename).suffix.lower() if audio.filename else ".wav"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            content = await audio.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            pipe = get_pipeline()
+            result = pipe.process(
+                audio_path=tmp_path,
+                language_profile=language_profile,
+                output_dir=None,
+            )
+            result["audio_file"] = audio.filename
+            results.append(result)
+        except Exception as e:
+            errors.append({"file": audio.filename, "error": str(e)})
+        finally:
+            os.unlink(tmp_path)
+
+    return JSONResponse(content={
+        "results": results,
+        "errors": errors,
+        "total": len(files),
+        "success": len(results),
+        "failed": len(errors),
+    })
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    parser = argparse.ArgumentParser(description="Slim Voice Feature Extraction API")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev only)")
+    args = parser.parse_args()
+
+    print(f"Starting Slim Pipeline API on http://{args.host}:{args.port}")
+    print(f"Docs: http://localhost:{args.port}/docs")
+    uvicorn.run(
+        "api:app",
+        host=args.host,
+        port=args.port,
+        workers=1,
+        reload=args.reload,
+    )

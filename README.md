@@ -1,502 +1,274 @@
-# HR Personality & Motivation Assessment Pipeline
+# Slim Voice Feature Extraction Pipeline
 
-AI-powered voice analysis pipeline that extracts **Big Five personality traits** and **motivation/engagement levels** from audio recordings using voice features (prosody, emotion, acoustics) and optional transcripts.
+Audio feature extraction pipeline — processes audio files and returns a JSON with all extracted voice features. No LLM, no transcription. Just signal processing + ML-based emotion detection.
 
-## 🎯 Key Features
+## What it does
 
-- **Voice-Only Analysis** — Assess personality and motivation from voice features alone (no transcript needed)
-- **Stable Scoring** — Deterministic formulas ensure consistent results for the same speaker
-- **Universal Audio Input** — Single file or folder, any audio format (WAV, MP3, M4A, AAC, FLAC, OGG)
-- **GPU Acceleration** — CUDA support with automatic GPU selection for shared servers
-- **Prosody Analysis** — Speaking rate, pitch variance, energy, pauses, rhythm
-- **Emotion Detection** — emotion2vec model with CPU fallback
-- **Acoustic Features** — eGeMAPS via OpenSMILE
-- **AI Assessment** — Groq LLM (LLaMA 3.3 70B) with deterministic scoring (temperature=0.0)
-- **Multiple Outputs** — JSON reports, HTML reports, batch summary tables
-- **Beautiful Visualization** — Color-coded progress bars for motivation and engagement
+Takes an audio file → returns JSON with:
+- **Prosody** — speaking rate (WPM), pitch mean/variance, energy, pauses, rhythm, speech-to-silence ratio
+- **Voice Quality** — HNR, jitter, shimmer
+- **Spectral** — MFCC mean + std (26 values)
+- **eGeMAPS** — 88 acoustic features via OpenSMILE
+- **Emotion Timeline** — per-segment emotion probabilities + VAD (valence/arousal/dominance) from MERaLiON-SER-v1
+- **Emotion Aggregates** — dominant emotion, valence/arousal stats, arc type, stress index, confidence score
+- **Motivation & Engagement** — deterministic score (0–100) based on voice indicators
+- **Granular Features** — 43 flat keys for downstream processing
+- **L2 Adjustments** — WPM cap + confidence penalty for non-native speakers
+- **Paralinguistic Summary** — text description of voice profile
 
-## 📊 Assessment Output
+## Models
 
-### Big Five Personality Profile (0–100)
+| Model | Purpose | Size | Cache |
+|---|---|---|---|
+| **MERaLiON/MERaLiON-SER-v1** | Emotion detection (7 emotions + VAD) | 770M params / 6.1 GB | `~/.cache/huggingface` |
 
-| Trait | What it measures | Voice indicators |
-|-------|-----------------|------------------|
-| **Openness** | Creativity, curiosity | Wide pitch range, expressive tone |
-| **Conscientiousness** | Organization, discipline | Steady pace, few fillers, structured speech |
-| **Extraversion** | Sociability, assertiveness | Fast rate, high energy, loud volume |
-| **Agreeableness** | Cooperation, trust | Warm prosody, smooth pitch |
-| **Neuroticism** | Emotional instability | Unstable pitch, many pauses, rough voice |
+OpenSMILE (eGeMAPS) and Praat (voice quality) are local CPU tools — no download needed.
 
-### Motivation & Engagement Assessment
-
-- **Motivation Score** (0-100) — Computed from voice features using deterministic formulas
-- **Engagement Score** (0-100) — Derived from motivation + extraversion
-- **Level** — High / Medium / Low (with hysteresis to prevent flickering)
-- **Pattern** — Rising / Falling / Consistent / Fluctuating
-- **Voice Indicators** — Energy, speaking rate, pauses, pitch dynamics, emotion
-
-**Example Output:**
-```
-Motivation & Engagement Analysis:
-  Overall Motivation [████░░░░░░░░░░░░░░░░] Low (20/100)
-  Pattern: Consistent
-
-  Voice-Based Indicators:
-    • energy_mean=0.028 (low)
-    • speaking_rate_wpm=104 (slow)
-    • pauses_per_minute=7.2 (high)
-    • pitch_variance=250 (low)
-
-  Engagement Level   [██████░░░░░░░░░░░░░░] Low (30/100)
-  Derived from motivation (20) and extraversion (30)
-```
-
-## 🚀 Quick Start
-
-### Installation
+## Quick Start
 
 ```bash
-cd SA_emotion_detection
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+# 1. Install dependencies
 pip install -r requirements.txt
-```
 
-Configure API key:
-```bash
+# 2. Configure
 cp .env.example .env
-# Edit .env → set GROQ_API_KEY
+# Set HF_TOKEN=hf_... (required for MERaLiON gated model)
+
+# 3. Download model once
+python download_models.py
+
+# 4a. Run as API server (recommended)
+uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
+
+# 4b. Or run CLI on a file
+python slim_main.py audio.webm --output-dir outputs/
 ```
 
-### Basic Usage
+## API Server
 
+Start:
 ```bash
-# Single audio file (voice-only analysis)
-python main.py interview.wav --skip-transcription
-
-# Folder of audio files
-python main.py recordings/ --skip-transcription --limit 5
-
-# With transcript
-python main.py interview.wav --transcript interview.txt
-
-# Generate HTML report
-python main.py interview.wav --html-report
+uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-## 🐳 Docker Deployment
+> **workers=1** is required — the MERaLiON model is loaded once into GPU memory and shared across all requests. Multiple workers would duplicate GPU memory usage.
 
-### Quick Start (Automatic GPU Selection)
+Model loads at startup and stays in memory — no reload per request.
 
-```bash
-# Build Docker image
-docker compose build
+### Endpoints
 
-# Check available GPUs
-./check_gpu.sh
-
-# Run pipeline (automatically selects free GPU)
-./run_pipeline.sh "Team Recordings/Digvijay/Audio/" --skip-transcription --limit 2
-```
-
-### Manual Docker Commands
-
-```bash
-# Build
-docker compose build hr-assessment
-
-# Run on specific GPU (e.g., GPU 1)
-docker run -d --name hr-assessment-pipeline \
-  --gpus '"device=1"' \
-  -v "$(pwd)/Team Recordings:/app/Team Recordings:ro" \
-  -v "$(pwd)/outputs:/app/outputs" \
-  -v "$(pwd)/.env:/app/.env:ro" \
-  -e GROQ_API_KEY \
-  -e CUDA_VISIBLE_DEVICES=1 \
-  -e WHISPER_DEVICE=cuda \
-  -e EMOTION_DEVICE=cuda \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  --shm-size=8g \
-  sa_emotion_detection-hr-assessment tail -f /dev/null
-
-# Run pipeline inside container
-docker exec hr-assessment-pipeline python main.py "Team Recordings/Digvijay/Audio/" --skip-transcription
-
-# Stop container
-docker stop hr-assessment-pipeline && docker rm hr-assessment-pipeline
-```
-
-## 🖥️ GPU Usage (Shared Server)
-
-### Automatic GPU Selection
-
-The `run_pipeline.sh` script automatically finds a free GPU and starts the container:
-
-```bash
-# Check available GPUs
-./check_gpu.sh
-
-# Run pipeline (auto-selects free GPU)
-./run_pipeline.sh "Team Recordings/Digvijay/Audio/" --skip-transcription
-```
-
-**Example output:**
-```
-🔍 Searching for available GPU...
-✅ Found free GPU: 2 (Quadro RTX 6000, 23.5 GB free)
-🚀 Starting container on GPU 2...
-✅ Container started successfully on GPU 2
-```
-
-### Using Multiple GPUs
-
-Distribute models across 2 GPUs for better performance:
-
-```bash
-docker run -d --name hr-assessment-pipeline \
-  --gpus '"device=0,1"' \
-  -v "$(pwd)/Team Recordings:/app/Team Recordings:ro" \
-  -v "$(pwd)/outputs:/app/outputs" \
-  -e GROQ_API_KEY \
-  -e CUDA_VISIBLE_DEVICES=0,1 \
-  -e WHISPER_DEVICE=cuda:0 \
-  -e EMOTION_DEVICE=cuda:1 \
-  --shm-size=8g \
-  sa_emotion_detection-hr-assessment tail -f /dev/null
-```
-
-**Model distribution:**
-- **GPU 0**: Whisper, WavLM, prosody
-- **GPU 1**: emotion2vec
-
-### Best Practices for Shared Servers
-
-1. **Always check GPU availability** before running: `./check_gpu.sh`
-2. **Use automatic GPU selection**: `./run_pipeline.sh`
-3. **Stop container when done**: `docker stop hr-assessment-pipeline`
-4. **Monitor GPU usage**: `watch -n 1 nvidia-smi`
-5. **Be considerate** — don't occupy GPUs unnecessarily
-
-## 📝 CLI Options
-
-```bash
-python main.py <input_path> [options]
-
-Positional:
-  input_path              Audio file or folder
-
-Options:
-  -t, --transcript PATH   Transcript file (.txt/.json)
-  -c, --candidate-id ID   Candidate identifier
-  -p, --position ROLE     Position / role context
-  -o, --output-dir DIR    Output directory (default: ./outputs)
-  -l, --limit N           Max files to process
-  --skip-transcription    Voice-only analysis (no Whisper)
-  --whisper-model SIZE    tiny/base/small/medium/large (default: base)
-  --html-report           Generate HTML report per file
-  --group-by-folder       Group results by parent folder
-  --no-save               Don't write JSON output
-  -q, --quiet             Suppress detailed output
-```
-
-## 🔬 How It Works
-
-### 1. Voice Feature Extraction
-
-**Prosody Features:**
-- Speaking rate (words per minute)
-- Pitch variance, range, mean, slope
-- Energy mean, std, range
-- Pauses per minute, long pauses count
-- Speech-to-silence ratio
-- Rhythm regularity
-
-**Emotion Detection:**
-- emotion2vec model (9 emotions: happy, sad, angry, neutral, fearful, surprised, disgusted, contempt, unknown)
-- Primary emotion + confidence score
-- Emotion timeline
-
-**Acoustic Features:**
-- eGeMAPS (88 features via OpenSMILE)
-- Voice quality (HNR, jitter, shimmer)
-- Spectral features
-
-### 2. Deterministic Scoring
-
-**Motivation Score (0-100):**
-```
-Start: 50
-
-Energy:     if energy_mean >= 0.06: +15, if <= 0.03: -15
-Pace:       if speaking_rate >= 150: +15, if <= 110: -15
-Pauses:     if pauses_per_minute <= 3: +10, if >= 6: -10
-Pitch:      if pitch_variance >= 800: +10, if <= 300: -10
-Emotion:    if happy/surprised + conf >= 0.5: +10
-            if sad/fearful + conf >= 0.5: -10
-
-Clamp to [0, 100]
-```
-
-**Engagement Score (0-100):**
-```
-engagement_score = round(0.6 * motivation_score + 0.4 * extraversion_score)
-```
-
-**Hysteresis (Stable Levels):**
-- Scores within ±7 points of boundaries (40, 70) → set to "Medium" to prevent flickering
-- Ensures same speaker gets consistent level across multiple recordings
-
-### 3. LLM Assessment
-
-- **Model**: Groq LLaMA 3.3 70B
-- **Temperature**: 0.0 (deterministic output)
-- **Input**: Voice features + optional transcript
-- **Output**: Big Five scores, motivation/engagement, strengths, development areas, HR summary
-
-## 📂 Output Files
-
-### JSON Report
+**`GET /health`**
 ```json
 {
-  "metadata": {
-    "audio_file": "interview.wav",
-    "candidate_id": "C001",
-    "timestamp": "20260215_120000"
-  },
-  "assessment": {
-    "big_five": {
-      "openness": {"score": 65, "confidence": 80, "reason": "..."},
-      "conscientiousness": {"score": 72, "confidence": 85, "reason": "..."},
-      ...
-    },
-    "motivation": {
-      "overall_level": "High",
-      "motivation_score": 75,
-      "pattern": "Rising",
-      "voice_indicators": ["high energy", "fast pace", ...]
-    },
-    "engagement": {
-      "overall_level": "High",
-      "engagement_score": 78,
-      "reason": "Derived from motivation (75) and extraversion (85)"
-    },
-    "trait_strengths": ["Conscientiousness", "Extraversion", ...],
-    "hr_summary": "..."
-  }
+  "status": "ok",
+  "pipeline": "slim",
+  "model_loaded": true,
+  "device": "mps",
+  "model": "MERaLiON/MERaLiON-SER-v1"
 }
 ```
 
-### Console Output
-```
-============================================================
-HR ASSESSMENT SUMMARY
-============================================================
-Candidate: John_Doe
-
-Big Five Personality Profile:
-  Openness           [█████████████░░░░░░░] 65/100 (80% conf)
-  Conscientiousness  [██████████████░░░░░░] 72/100 (85% conf)
-  Extraversion       [█████████████████░░░] 85/100 (90% conf)
-  Agreeableness      [████████████░░░░░░░░] 60/100 (75% conf)
-  Neuroticism        [██████░░░░░░░░░░░░░░] 30/100 (70% conf)
-
-Motivation & Engagement Analysis:
-  Overall Motivation [███████████████░░░░░] High (75/100)
-  Pattern: Rising
-
-  Voice-Based Indicators:
-    • energy_mean=0.065 (high)
-    • speaking_rate_wpm=165 (fast)
-    • pauses_per_minute=2.5 (low)
-    • pitch_variance=850 (high)
-
-  Engagement Level   [███████████████░░░░░] High (78/100)
-  Derived from motivation (75) and extraversion (85)
-
-Key Strengths:
-  • Extraversion
-  • Conscientiousness
-  • Achievement-Striving
-
-Development Areas:
-  • Openness
-  • Agreeableness
-
-✓ Processing completed in 125.34s
-============================================================
-```
-
-## 🐍 Python API
-
-```python
-from src.pipeline import HRAssessmentPipeline
-from src.config import load_config
-
-# Initialize pipeline
-pipeline = HRAssessmentPipeline(load_config())
-
-# Process audio (voice-only)
-result = pipeline.process(
-    audio_path="interview.wav",
-    candidate_id="C001",
-    skip_transcription=True
-)
-
-# Access results
-print(f"Motivation: {result.motivation.motivation_score}/100")
-print(f"Engagement: {result.engagement.engagement_score}/100")
-print(f"Extraversion: {result.big_five.extraversion.score}/100")
-
-# Print summary
-pipeline.print_summary(result)
-```
-
-## 🌐 REST API
-
+**`POST /assess`** — upload one audio file, get full feature JSON
 ```bash
-# Start API server
-uvicorn api:app --reload
-
-# Assess candidate
 curl -X POST http://localhost:8000/assess \
-  -F "audio=@interview.wav" \
-  -F "candidate_id=C001"
+  -F "audio=@interview.webm" \
+  -F "language_profile=non_native_english"
 ```
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | API info |
-| `/health` | GET | Health check |
-| `/assess` | POST | JSON assessment |
-| `/assess/html` | POST | HTML report |
-
-## ⚙️ Configuration
-
-### Environment Variables
-
+**`POST /assess/batch`** — upload multiple files
 ```bash
-# .env
-GROQ_API_KEY=gsk_...                       # Required
-GROQ_MODEL=llama-3.3-70b-versatile         # Optional
-WHISPER_MODEL=base                          # tiny/base/small/medium/large
-WHISPER_DEVICE=cuda                         # cpu/cuda
-EMOTION_DEVICE=cuda                         # cpu/cuda
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+curl -X POST http://localhost:8000/assess/batch \
+  -F "files=@audio1.webm" \
+  -F "files=@audio2.webm" \
+  -F "language_profile=non_native_english"
 ```
 
-### Python Configuration
-
+From Python:
 ```python
-from src.config import PipelineConfig, WhisperConfig, GroqConfig
+import requests
 
-config = PipelineConfig(
-    whisper=WhisperConfig(model_name="medium", device="cuda"),
-    groq=GroqConfig(temperature=0.0),  # Deterministic output
-)
+with open("interview.webm", "rb") as f:
+    resp = requests.post(
+        "http://localhost:8000/assess",
+        files={"audio": ("interview.webm", f, "audio/webm")},
+        data={"language_profile": "non_native_english"},
+    )
 
-pipeline = HRAssessmentPipeline(config)
+result = resp.json()
+print(result["emotion_aggregates"]["dominant_emotion"])
+print(result["motivation_engagement"]["motivation_score"])
 ```
 
-## 🛠️ Troubleshooting
+### Supported audio formats
+`.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.webm`, `.aac`
 
-### CUDA Out of Memory
-
-**Symptoms:**
-```
-Model detection failed: CUDA out of memory. Tried to allocate 6.19 GiB...
-```
-
-**Solutions:**
-1. **Use 2 GPUs** (recommended):
-   ```bash
-   ./run_pipeline.sh  # Auto-selects free GPU
-   ```
-
-2. **CPU fallback** (automatic) — emotion2vec will run on CPU if GPU OOM occurs
-
-3. **Increase shared memory**:
-   ```bash
-   --shm-size=16g
-   ```
-
-4. **Use CPU mode** (slower):
-   ```bash
-   -e WHISPER_DEVICE=cpu -e EMOTION_DEVICE=cpu
-   ```
-
-### No Free GPUs
+## CLI
 
 ```bash
-# Check GPU availability
-./check_gpu.sh
+# Single file
+python slim_main.py audio.webm
 
-# Wait for GPUs to free up, or use CPU mode
+# With options
+python slim_main.py audio.webm \
+  --output-dir ./outputs \
+  --language-profile non_native_english
+
+# Batch (folder)
+python slim_main.py ./recordings/ --output-dir ./outputs
 ```
 
-### Inconsistent Motivation Scores
+Output: `outputs/<filename>_<timestamp>_slim.json`
 
-The new deterministic formulas ensure consistency. If you see variations:
-- Check that voice features are extracted correctly
-- Verify temperature=0.0 in config
-- Ensure using latest Docker image
+## JSON Output Structure
 
-## 📁 Project Structure
+```json
+{
+  "pipeline": "slim",
+  "version": "1.0",
+  "timestamp": "...",
+  "audio_file": "interview.webm",
+  "audio_duration_seconds": 74.0,
+  "language_profile": "non_native_english",
+  "processing_time_seconds": 68.0,
+
+  "prosody": {
+    "speaking_rate_wpm": 203.3,
+    "pitch_mean_hz": 190.1,
+    "pitch_variance": 1733.4,
+    "energy_mean": 0.05,
+    "energy_level": "medium",
+    "pauses_per_minute": 13.8,
+    "rhythm_regularity": 1.16,
+    "speech_to_silence_ratio": 4.78,
+    "...": "16 keys total"
+  },
+
+  "voice_quality": {
+    "HNR": 10.93,
+    "jitter": 0.020043,
+    "shimmer": 0.133876
+  },
+
+  "spectral": { "...": "26 MFCC keys" },
+
+  "egemaps": { "...": "88 acoustic features" },
+
+  "emotion_timeline": [
+    {
+      "start": 0.0, "end": 7.5,
+      "emotion": "sad",
+      "confidence": 0.62,
+      "valence": -0.355,
+      "arousal": 0.032,
+      "dominance": 0.353,
+      "probabilities": { "neutral": 0.08, "sad": 0.71, "..." : "7 emotions" }
+    }
+  ],
+
+  "emotion_aggregates": {
+    "dominant_emotion": "sad",
+    "dominant_ratio": 0.73,
+    "valence_mean": -0.355,
+    "arousal_mean": 0.032,
+    "stress_index": 0.096,
+    "confidence_score": 0.62,
+    "arc_type": "fluctuating",
+    "emotional_shifts": 8,
+    "segments_analyzed": 37,
+    "...": "17 keys total"
+  },
+
+  "motivation_engagement": {
+    "motivation_score": 66,
+    "motivation_level": "Medium",
+    "pattern": "steady pitch, dynamic energy",
+    "components": { "energy": 0.0, "pace": 10.0, "..." : "8 components" },
+    "voice_indicators": ["speaking_rate_wpm=203.3 (fast)", "..."]
+  },
+
+  "l2_adjustments": { "...": "L2 speaker corrections applied" },
+  "paralinguistic_summary": "Voice profile: ...",
+  "granular_features": { "...": "43 flat keys" }
+}
+```
+
+## Deployment on GPU Server
+
+### Without Docker
+```bash
+git clone <repo> && cd SA_emotion_detection_pipeline
+pip install -r requirements.txt
+cp .env.example .env && nano .env   # set HF_TOKEN
+
+python download_models.py           # download MERaLiON once (~6 GB)
+
+uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+### With Docker (recommended for remote servers)
+```bash
+cp .env.example .env   # set HF_TOKEN
+
+# Build (downloads model into image at build time)
+docker compose up -d --build
+
+# Or build manually
+docker build --build-arg HF_TOKEN=hf_xxx -t slim-pipeline .
+docker run --gpus all -p 8000:8000 \
+  -v slim-pipeline-models:/models \
+  -v ./outputs:/app/outputs \
+  slim-pipeline
+```
+
+Model is stored in Docker volume `slim-pipeline-models` — persists across container restarts, no re-download.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HF_TOKEN` | — | **Required.** HuggingFace token for MERaLiON gated model |
+| `EMOTION_DEVICE` | `auto` | Device: `auto`, `cpu`, `cuda`, `cuda:0`, `mps` |
+| `EMOTION_GPU` | `0` | GPU index when using CUDA |
+| `EMOTION_BATCH_SIZE` | `0` | Batch size (0 = auto-detect) |
+| `LANGUAGE_PROFILE` | `non_native_english` | Scoring profile: `non_native_english`, `native_english`, `sea_english` |
+| `HF_HOME` | `~/.cache/huggingface` | Model cache directory |
+
+## Project Structure
 
 ```
-SA_emotion_detection/
-├── main.py                    # CLI entry point
-├── api.py                     # FastAPI REST server
-├── Dockerfile                 # Docker image
-├── docker-compose.yml         # Docker orchestration
+├── api.py                    # FastAPI server (POST /assess, GET /health)
+├── slim_main.py              # CLI entry point
+├── slim_pipeline.py          # Core pipeline orchestrator
+├── download_models.py        # Pre-download MERaLiON to HF cache
+├── Dockerfile                # Production container (CUDA)
+├── docker-compose.yml        # GPU server deployment
 ├── requirements.txt
 ├── .env.example
-├── check_gpu.sh              # GPU availability checker
-├── run_pipeline.sh           # Auto GPU selection script
-├── src/
-│   ├── config.py              # Configuration
-│   ├── pipeline.py            # Main orchestrator
-│   ├── models/
-│   │   └── schemas.py         # Pydantic data models
-│   ├── extractors/
-│   │   ├── transcription.py   # Whisper speech-to-text
-│   │   ├── prosody.py         # Pitch, energy, pauses
-│   │   ├── emotion.py         # emotion2vec detection
-│   │   └── egemaps.py         # eGeMAPS acoustic features
-│   ├── assessment/
-│   │   ├── groq_assessor.py   # Groq LLM integration
-│   │   └── prompt_templates.py # Deterministic scoring prompts
-│   └── utils/
-│       ├── audio.py           # Audio utilities
-│       └── reporting.py       # HTML report generation
-└── outputs/                   # Generated reports
+└── src/
+    ├── config.py             # EmotionConfig, ProsodyConfig, EgemapsConfig
+    ├── extractors/
+    │   ├── prosody.py        # Pitch, energy, pauses (librosa)
+    │   ├── egemaps.py        # eGeMAPS features (openSMILE)
+    │   ├── emotion_meralion.py  # MERaLiON-SER-v1 emotion detection
+    │   ├── emotion_fusion.py    # SNR filtering, VAD smoothing
+    │   └── voice_analyzer.py   # Unified voice analysis + aggregates
+    ├── assessment/
+    │   └── motivation_scorer.py  # Deterministic motivation/engagement
+    ├── models/schemas.py     # Pydantic data models
+    └── utils/
+        ├── audio.py          # load_audio, normalize, trim_silence
+        ├── device.py         # GPU/MPS/CPU detection
+        └── scoring.py        # Score-to-label mapping
 ```
 
-## 📋 Requirements
+## Performance
 
-- Python 3.9+
-- FFmpeg
-- Groq API key → https://console.groq.com
-- NVIDIA GPU (optional, for acceleration)
-- NVIDIA Container Toolkit (for Docker GPU support)
+Tested on Apple M-series (MPS):
 
-## 🎵 Supported Audio Formats
+| Audio Duration | Processing Time |
+|---|---|
+| 74 sec | ~68 sec |
 
-WAV, MP3, M4A, AAC, FLAC, OGG, WebM
+On NVIDIA GPU (CUDA) expected **3–5x faster** (~15–25 sec for 74 sec audio).
 
-## 📄 License
-
-MIT License
-
-## 🙏 Acknowledgments
-
-- **Whisper** — OpenAI speech-to-text
-- **emotion2vec** — Alibaba DAMO Academy
-- **OpenSMILE** — eGeMAPS acoustic features
-- **Groq** — Fast LLM inference
-- **librosa** — Audio processing
-
----
-
-**For detailed GPU setup and troubleshooting, see the helper scripts:**
-- `./check_gpu.sh` — Check GPU availability
-- `./run_pipeline.sh` — Auto-select free GPU and run pipeline
+Model loads once at server startup (~3 sec from cache). All subsequent requests reuse the loaded model.

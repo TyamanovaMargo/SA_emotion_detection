@@ -1,60 +1,24 @@
-services:
-  hr-assessment:
-    build: .
-    container_name: hr-assessment-pipeline
-    volumes:
-      # Mount Team Recordings folder
-      - ./Team Recordings:/app/Team Recordings:ro
-      # Mount output directory
-      - ./outputs:/app/outputs
-      # Mount .env file (optional)
-      - ./.env:/app/.env:ro
-    environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
-      - WHISPER_MODEL=${WHISPER_MODEL:-base}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      - WHISPER_GPU=${WHISPER_GPU:-0}
-      - EMOTION_DEVICE=${EMOTION_DEVICE:-cuda}
-      - EMOTION_GPU=${EMOTION_GPU:-1}
-      - LANGUAGE_PROFILE=${LANGUAGE_PROFILE:-non_native_english}
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
-      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH}
-    # Allocate memory for models
-    shm_size: 8g
-    # Use available CPUs
-    cpus: "8.0"
-    # GPU support - expose 2 GPUs for Whisper + Emotion
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 2
-              capabilities: [gpu]
-    # Keep container running for interactive use
-    stdin_open: true
-    tty: true
-    # Override default command
-    command: tail -f /dev/null
+version: "3.8"
 
-  # Optional: API service
-  hr-assessment-api:
-    build: .
-    container_name: hr-assessment-api
+services:
+  slim-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HF_TOKEN: ${HF_TOKEN}
     ports:
       - "8000:8000"
-    volumes:
-      - ./outputs:/app/outputs
-      - ./.env:/app/.env:ro
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      - TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
-    mem_limit: 8g
-    shm_size: 2g
-    # GPU support
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HOME=/models
+      - EMOTION_DEVICE=cuda
+      - EMOTION_GPU=0
+      - EMOTION_BATCH_SIZE=0
+      - LANGUAGE_PROFILE=non_native_english
+    volumes:
+      - model-cache:/models
+      - ./outputs:/app/outputs
     deploy:
       resources:
         reservations:
@@ -62,4 +26,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  model-cache:
+    name: slim-pipeline-models
