@@ -33,23 +33,14 @@ def score_to_label(score: int) -> str:
 
 # ── WPM thresholds (#1) ────────────────────────────────────────────────
 
-def wpm_label(wpm: float, language_profile: str = "native_english") -> str:
-    """Return speaking rate label adjusted for language profile."""
-    if language_profile in ("non_native_english", "sea_english"):
-        # Non-native: multiply thresholds by 0.8
-        if wpm < 88:
-            return "slow"
-        elif wpm <= 120:
-            return "moderate"
-        else:
-            return "fast"
+def wpm_label(wpm: float, language_profile: str = "non_native_english") -> str:
+    """Return speaking rate label for non_native_english profile."""
+    if wpm < 88:
+        return "slow"
+    elif wpm <= 120:
+        return "moderate"
     else:
-        if wpm < 110:
-            return "slow"
-        elif wpm <= 150:
-            return "moderate"
-        else:
-            return "fast"
+        return "fast"
 
 
 # ── Dominant emotion with tiebreaker (#3) ──────────────────────────────

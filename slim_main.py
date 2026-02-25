@@ -49,7 +49,7 @@ def main():
     parser.add_argument(
         "--language-profile",
         default="non_native_english",
-        choices=["native_english", "non_native_english", "sea_english"],
+        choices=["non_native_english"],
         help="Language profile for scoring thresholds (default: non_native_english)",
     )
     parser.add_argument(

@@ -71,7 +71,7 @@ class VoiceFeatures(BaseModel):
     wavlm_embedding_summary: str = Field(description="Summary of voice embedding profile")
     detected_language: str = Field(default="unknown", description="Detected language code (e.g. 'en', 'id', 'zh')")
     language_confidence: float = Field(default=0.0, description="Confidence of language detection (0-1)")
-    language_profile: str = Field(default="non_native_english", description="Language profile: native_english, non_native_english, sea_english")
+    language_profile: str = Field(default="non_native_english", description="Language profile: always non_native_english")
 
 
 class HRAssessmentInput(BaseModel):
@@ -81,7 +81,7 @@ class HRAssessmentInput(BaseModel):
     audio_duration: float
     candidate_id: Optional[str] = None
     position: Optional[str] = None
-    language_profile: str = Field(default="non_native_english", description="Language profile for scoring calibration")
+    language_profile: str = Field(default="non_native_english", description="Language profile for scoring")
 
 
 class BigFiveScore(BaseModel):

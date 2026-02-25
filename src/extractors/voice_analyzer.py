@@ -81,13 +81,13 @@ class VoiceAnalyzer:
         audio: np.ndarray,
         sample_rate: int,
         word_count: int = 0,
-        language_profile: str = "native_english",
+        language_profile: str = "non_native_english",
     ) -> Dict[str, Any]:
         """
         Run full voice analysis and return simplified JSON structure.
 
         Args:
-            language_profile: 'native_english', 'non_native_english', or 'sea_english'.
+            language_profile: always 'non_native_english'.
                 Used for L2 adjustments: confidence penalty, WPM cap, SAD relabeling.
 
         Returns:
@@ -747,10 +747,10 @@ class VoiceAnalyzer:
         emotion_agg: Dict[str, Any],
         duration: float,
         emotion_timeline: Optional[List[Dict[str, Any]]] = None,
-        language_profile: str = "native_english",
+        language_profile: str = "non_native_english",
     ) -> str:
         """Generate a detailed text summary of voice profile for LLM consumption."""
-        is_l2 = language_profile in ("non_native_english", "sea_english")
+        is_l2 = True
         parts = []
 
         if is_l2:
@@ -762,10 +762,7 @@ class VoiceAnalyzer:
         if f0 > 0:
             pitch_level = "high" if f0 > 200 else "low" if f0 < 130 else "medium"
             variability = "high" if f0_std > 30 else "low" if f0_std < 15 else "moderate"
-            if is_l2:
-                trait_hint = "(L2: high variability may reflect prosodic transfer)" if variability == "high" else ""
-            else:
-                trait_hint = "(extraverted)" if variability == "high" else "(introverted)" if variability == "low" else ""
+            trait_hint = "(L2: high variability may reflect prosodic transfer)" if variability == "high" else ""
             parts.append(f"{pitch_level} pitch with {variability} variability {trait_hint}".strip())
 
         # --- Speech rate ---
@@ -774,10 +771,7 @@ class VoiceAnalyzer:
         if rate > 0:
             speed = "fast" if rate > 5.0 else "slow" if rate < 3.0 else "moderate"
             pauses = "few pauses" if pause_ratio < 0.1 else "many pauses" if pause_ratio > 0.25 else "moderate pauses"
-            if is_l2:
-                conf_hint = "(L2: pauses may reflect cognitive load, not hesitancy)" if pause_ratio > 0.15 else ""
-            else:
-                conf_hint = "(confident)" if speed in ["fast", "moderate"] and pause_ratio < 0.15 else "(hesitant)" if pause_ratio > 0.25 else ""
+            conf_hint = "(L2: pauses may reflect cognitive load, not hesitancy)" if pause_ratio > 0.15 else ""
             parts.append(f"speaks {speed} with {pauses} {conf_hint}".strip())
 
         # --- Stress peaks ---

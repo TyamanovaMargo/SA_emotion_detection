@@ -11,25 +11,10 @@ class MotivationScorer:
     
     Uses deterministic formulas based on acoustic, prosodic, and emotional features.
     Provides temporal analysis to detect motivation trends over time.
-    
-    Supports three language profiles:
-    - native_english: standard thresholds, full emotion weight
-    - non_native_english: relaxed pace/pause thresholds, reduced emotion weight
-    - sea_english: further relaxed thresholds for SEA-accented English,
-                   minimal emotion weight, prosody proxies replace emotion
     """
     
-    # Profile-specific threshold presets
+    # Threshold presets for non_native_english profile
     PROFILES = {
-        "native_english": {
-            "energy_high": 0.08, "energy_low": 0.02,
-            "rate_high": 160, "rate_low": 100,
-            "pauses_low": 4, "pauses_high": 10,
-            "pitch_var_high": 700, "pitch_var_low": 250,
-            "rhythm_low": 0.3, "rhythm_mid": 0.8, "rhythm_high": 1.3,
-            "ratio_high": 12, "ratio_low": 4,
-            "emotion_weight": 1.0,  # full
-        },
         "non_native_english": {
             "energy_high": 0.06, "energy_low": 0.015,
             "rate_high": 140, "rate_low": 80,
@@ -37,28 +22,19 @@ class MotivationScorer:
             "pitch_var_high": 500, "pitch_var_low": 150,
             "rhythm_low": 0.3, "rhythm_mid": 0.8, "rhythm_high": 1.3,
             "ratio_high": 10, "ratio_low": 3,
-            "emotion_weight": 0.5,  # reduced
-        },
-        "sea_english": {
-            "energy_high": 0.05, "energy_low": 0.012,
-            "rate_high": 130, "rate_low": 70,
-            "pauses_low": 8, "pauses_high": 18,
-            "pitch_var_high": 400, "pitch_var_low": 100,
-            "rhythm_low": 0.3, "rhythm_mid": 0.9, "rhythm_high": 1.5,
-            "ratio_high": 8, "ratio_low": 2,
-            "emotion_weight": 0.25,  # minimal — rely on prosody proxies
+            "emotion_weight": 0.5,
         },
     }
     
     def __init__(self, language_profile: str = "non_native_english"):
         """
-        Initialize scorer with thresholds adapted for language profile.
+        Initialize scorer.
         
         Args:
-            language_profile: "native_english", "non_native_english", or "sea_english"
+            language_profile: ignored (kept for API compatibility); always uses non_native_english thresholds
         """
-        self.language_profile = language_profile
-        profile = self.PROFILES.get(language_profile, self.PROFILES["non_native_english"])
+        self.language_profile = "non_native_english"
+        profile = self.PROFILES["non_native_english"]
         
         self.energy_high_threshold = profile["energy_high"]
         self.energy_low_threshold = profile["energy_low"]
@@ -218,31 +194,22 @@ class MotivationScorer:
     
     def _score_pace(self, prosody: ProsodyFeatures) -> float:
         """Score based on speaking rate (weight: 15%).
-        Non-native/SEA: slower pace is cognitive load, not low motivation — reduced penalty.
+        Slower pace reflects cognitive load, not low motivation — reduced penalty.
         """
         if prosody.speaking_rate_wpm >= self.rate_high_threshold:
             return 10.0
         elif prosody.speaking_rate_wpm <= self.rate_low_threshold:
-            if self.language_profile == "sea_english":
-                return -3.0
-            elif self.language_profile == "non_native_english":
-                return -4.0
-            return -8.0
+            return -4.0
         return 0.0
     
     def _score_pauses(self, prosody: ProsodyFeatures) -> float:
         """Score based on pause frequency (weight: 10%).
-        Non-native/SEA: pauses are cognitive load, not nervousness — reduced penalty.
+        Pauses reflect cognitive load, not nervousness — reduced penalty.
         """
         if prosody.pauses_per_minute <= self.pauses_low_threshold:
             return 6.0
         elif prosody.pauses_per_minute >= self.pauses_high_threshold:
-            # Softer penalty for non-native speakers
-            if self.language_profile == "sea_english":
-                return -2.0
-            elif self.language_profile == "non_native_english":
-                return -3.0
-            return -6.0
+            return -3.0
         return 0.0
     
     def _score_pitch(self, prosody: ProsodyFeatures) -> float:
@@ -356,9 +323,8 @@ class MotivationScorer:
         if emotions.primary_emotion == "undetected":
             use_emotion = False
         
-        # Determine effective emotion weight based on reliability + profile
-        # Profile weight: 1.0 (native), 0.5 (non-native), 0.25 (SEA)
-        # Reliability multiplier: valid_ratio clamped to [0, 1]
+        # Determine effective emotion weight based on reliability
+        # Base weight: 0.5; reliability multiplier scales it down for poor detections
         reliability_mult = min(valid_ratio * 2, 1.0)  # 0.5 ratio → 1.0 mult, below 0.25 → <0.5
         effective_emotion_weight = self.emotion_weight * reliability_mult
         

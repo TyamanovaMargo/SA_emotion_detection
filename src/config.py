@@ -63,7 +63,7 @@ class MotivationConfig(BaseModel):
     """Motivation scoring configuration."""
     language_profile: str = Field(
         default_factory=lambda: os.getenv("LANGUAGE_PROFILE", "non_native_english"),
-        description="Language profile: 'non_native_english', 'native_english', or 'sea_english'"
+        description="Language profile: always 'non_native_english'"
     )
 
 

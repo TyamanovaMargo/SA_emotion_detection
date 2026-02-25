@@ -1,461 +1,470 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SA Emotion Detection Pipeline — Diagrams</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Slim Voice Feature Extraction — Pipeline Diagram</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
 
-    body {
-      background: #0d0d1a;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      padding: 32px 24px;
-    }
+  .header { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-bottom: 1px solid #334155; padding: 28px 40px; }
+  .header h1 { font-size: 1.6rem; font-weight: 700; color: #f1f5f9; letter-spacing: -0.5px; }
+  .header p { color: #94a3b8; margin-top: 6px; font-size: 0.9rem; }
+  .badge { display: inline-block; background: #1d4ed8; color: #bfdbfe; font-size: 0.72rem; font-weight: 600; padding: 2px 10px; border-radius: 20px; margin-left: 12px; vertical-align: middle; }
+  .badge.green { background: #166534; color: #bbf7d0; }
 
-    h1 {
-      text-align: center;
-      font-size: 1.6rem;
-      color: #4a90d9;
-      margin-bottom: 8px;
-      letter-spacing: 1px;
-    }
+  .tabs { display: flex; gap: 2px; background: #1e293b; border-bottom: 1px solid #334155; padding: 0 40px; }
+  .tab { padding: 14px 22px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: #94a3b8; border-bottom: 2px solid transparent; transition: all 0.2s; }
+  .tab:hover { color: #e2e8f0; }
+  .tab.active { color: #60a5fa; border-bottom-color: #60a5fa; }
 
-    .subtitle {
-      text-align: center;
-      color: #888;
-      font-size: 0.9rem;
-      margin-bottom: 36px;
-    }
+  .content { padding: 32px 40px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
 
-    .tabs {
-      display: flex;
-      justify-content: center;
-      gap: 12px;
-      margin-bottom: 32px;
-      flex-wrap: wrap;
-    }
+  /* Cards */
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .card h3 { font-size: 0.95rem; font-weight: 600; color: #f1f5f9; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .card h3 .icon { font-size: 1.1rem; }
 
-    .tab-btn {
-      padding: 10px 24px;
-      border: 1px solid #4a90d9;
-      background: transparent;
-      color: #4a90d9;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.9rem;
-      transition: all 0.2s;
-    }
+  /* Pipeline flow */
+  .pipeline { display: flex; flex-direction: column; gap: 0; }
+  .stage { display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start; margin-bottom: 8px; }
+  .stage-label { background: #0f172a; border: 1px solid #475569; border-radius: 8px; padding: 12px 16px; text-align: center; }
+  .stage-label .title { font-size: 0.8rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stage-label .subtitle { font-size: 0.75rem; color: #64748b; margin-top: 3px; }
+  .stage-body { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px 18px; }
 
-    .tab-btn:hover { background: #1a2a3a; }
-    .tab-btn.active { background: #4a90d9; color: #fff; }
+  .arrow { text-align: left; padding: 4px 0 4px 110px; color: #475569; font-size: 1.2rem; }
 
-    .diagram-panel { display: none; }
-    .diagram-panel.active { display: block; }
+  .step-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .step { background: #1e293b; border: 1px solid #475569; border-radius: 6px; padding: 6px 12px; font-size: 0.78rem; color: #cbd5e1; }
+  .step.blue { border-color: #2563eb; background: #1e3a5f; color: #93c5fd; }
+  .step.green { border-color: #16a34a; background: #14532d; color: #86efac; }
+  .step.purple { border-color: #7c3aed; background: #2e1065; color: #c4b5fd; }
+  .step.orange { border-color: #d97706; background: #451a03; color: #fcd34d; }
+  .step.red { border-color: #dc2626; background: #450a0a; color: #fca5a5; }
 
-    .diagram-title {
-      font-size: 1.1rem;
-      color: #7ed321;
-      margin-bottom: 6px;
-      padding-left: 4px;
-    }
+  /* Mermaid wrapper */
+  .mermaid-wrap { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 32px; overflow-x: auto; }
+  .mermaid { max-width: 100%; }
 
-    .diagram-desc {
-      font-size: 0.82rem;
-      color: #888;
-      margin-bottom: 20px;
-      padding-left: 4px;
-    }
+  /* Grid layout for overview */
+  .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .overview-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; }
+  .overview-card .oc-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .overview-card .oc-icon { font-size: 1.5rem; }
+  .overview-card .oc-title { font-size: 0.95rem; font-weight: 600; color: #f1f5f9; }
+  .overview-card .oc-sub { font-size: 0.75rem; color: #64748b; }
+  .overview-card ul { list-style: none; }
+  .overview-card ul li { font-size: 0.78rem; color: #94a3b8; padding: 4px 0; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; }
+  .overview-card ul li:last-child { border-bottom: none; }
+  .overview-card ul li span { color: #60a5fa; font-weight: 500; }
 
-    .mermaid-wrap {
-      background: #111122;
-      border: 1px solid #2a2a4a;
-      border-radius: 10px;
-      padding: 24px;
-      overflow-x: auto;
-    }
+  /* API diagram */
+  .api-flow { display: flex; flex-direction: column; gap: 10px; }
+  .api-req { background: #0f172a; border: 1px solid #2563eb; border-radius: 8px; padding: 12px 18px; display: flex; align-items: center; gap: 14px; }
+  .api-method { background: #1d4ed8; color: #fff; font-size: 0.72rem; font-weight: 700; padding: 3px 10px; border-radius: 4px; min-width: 50px; text-align: center; }
+  .api-path { font-family: monospace; font-size: 0.85rem; color: #93c5fd; }
+  .api-desc { font-size: 0.78rem; color: #64748b; margin-left: auto; }
 
-    .mermaid { min-width: 600px; }
-  </style>
+  .info-row { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .info-pill { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 6px 14px; font-size: 0.75rem; color: #94a3b8; }
+  .info-pill strong { color: #e2e8f0; }
+</style>
 </head>
 <body>
 
-<h1>SA Emotion Detection Pipeline</h1>
-<p class="subtitle">Voice analysis · Personality assessment · Emotion timeline</p>
+<div class="header">
+  <h1>Slim Voice Feature Extraction Pipeline <span class="badge">v1.0</span> <span class="badge green">NO LLM · NO TRANSCRIPTION</span></h1>
+  <p>Audio → JSON with all extracted features. One ML model (MERaLiON-SER-v1) + signal processing libraries.</p>
+</div>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="showTab('tab1', this)">1 · Pipeline Flow</button>
-  <button class="tab-btn" onclick="showTab('tab2', this)">2 · Data Flow</button>
-  <button class="tab-btn" onclick="showTab('tab3', this)">3 · Features → Big Five</button>
+  <div class="tab active" onclick="showTab('overview')">Overview</div>
+  <div class="tab" onclick="showTab('flow')">Pipeline Flow</div>
+  <div class="tab" onclick="showTab('diagram')">Architecture Diagram</div>
+  <div class="tab" onclick="showTab('api')">API</div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════ TAB 1 -->
-<div id="tab1" class="diagram-panel active">
-  <div class="diagram-title">Pipeline Flow — Step by Step</div>
-  <div class="diagram-desc">Audio file → transcription → feature extraction → LLM assessment → JSON report</div>
-  <div class="mermaid-wrap">
-    <div class="mermaid">
+<div class="content">
+
+  <!-- OVERVIEW TAB -->
+  <div id="tab-overview" class="tab-panel active">
+    <div class="overview-grid">
+      <div class="overview-card">
+        <div class="oc-header"><div class="oc-icon">🎙️</div><div><div class="oc-title">Input</div><div class="oc-sub">Any audio format</div></div></div>
+        <ul>
+          <li>Formats <span>.wav · .mp3 · .m4a · .webm · .ogg · .flac</span></li>
+          <li>Resampled to <span>16 kHz mono</span></li>
+          <li>Min duration <span>~1 sec</span></li>
+          <li>Language profile <span>non_native_english</span></li>
+        </ul>
+      </div>
+      <div class="overview-card">
+        <div class="oc-header"><div class="oc-icon">🤖</div><div><div class="oc-title">ML Model</div><div class="oc-sub">MERaLiON/MERaLiON-SER-v1</div></div></div>
+        <ul>
+          <li>Parameters <span>770 M</span></li>
+          <li>Cache size <span>~6.1 GB</span></li>
+          <li>Device <span>CUDA / MPS / CPU</span></li>
+          <li>Loaded at startup <span>once</span></li>
+          <li>Segment size <span>7.5 s, 50% overlap</span></li>
+          <li>Output <span>7 emotions + VAD</span></li>
+        </ul>
+      </div>
+      <div class="overview-card">
+        <div class="oc-header"><div class="oc-icon">📊</div><div><div class="oc-title">Signal Processing</div><div class="oc-sub">CPU libraries (no download)</div></div></div>
+        <ul>
+          <li>librosa <span>prosody, MFCC, spectral</span></li>
+          <li>OpenSMILE <span>88 eGeMAPS features</span></li>
+          <li>Praat/Parselmouth <span>jitter, shimmer, HNR</span></li>
+          <li>scipy / numpy <span>signal utils</span></li>
+        </ul>
+      </div>
+      <div class="overview-card">
+        <div class="oc-header"><div class="oc-icon">📦</div><div><div class="oc-title">JSON Output</div><div class="oc-sub">All feature groups</div></div></div>
+        <ul>
+          <li>prosody <span>16 features</span></li>
+          <li>voice_quality <span>4 features</span></li>
+          <li>spectral (MFCC) <span>26 features</span></li>
+          <li>egemaps <span>24 grouped features</span></li>
+          <li>emotion_timeline <span>per segment × 37</span></li>
+          <li>emotion_aggregates <span>17 features</span></li>
+          <li>motivation_engagement <span>score + components</span></li>
+          <li>granular_features <span>43 flat features</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="icon">⚡</span> Performance</h3>
+      <div class="info-row">
+        <div class="info-pill"><strong>Apple M-series (MPS)</strong> — ~68s for 74s audio</div>
+        <div class="info-pill"><strong>NVIDIA GPU (CUDA)</strong> — est. ~15–25s for 74s audio</div>
+        <div class="info-pill"><strong>Model load</strong> — 3–4s from HF cache</div>
+        <div class="info-pill"><strong>workers=1</strong> — model shared across all requests</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOW TAB -->
+  <div id="tab-flow" class="tab-panel">
+    <div class="pipeline">
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">📥 Input</div>
+          <div class="subtitle">Audio file</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step blue">audio.webm / .wav / .mp3 / .m4a / .flac</div>
+            <div class="step blue">librosa.load() → 16kHz mono float32</div>
+            <div class="step blue">duration detection</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">🎵 Prosody</div>
+          <div class="subtitle">ProsodyExtractor<br>librosa</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step green">speaking_rate_wpm</div>
+            <div class="step green">pitch_mean_hz</div>
+            <div class="step green">pitch_variance</div>
+            <div class="step green">pitch_range</div>
+            <div class="step green">pitch_slope</div>
+            <div class="step green">energy_mean / std / range</div>
+            <div class="step green">energy_level</div>
+            <div class="step green">pauses_per_minute</div>
+            <div class="step green">pause_duration_mean / std</div>
+            <div class="step green">long_pauses_count</div>
+            <div class="step green">articulation_rate</div>
+            <div class="step green">speech_to_silence_ratio</div>
+            <div class="step green">rhythm_regularity</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">🎤 Voice Quality</div>
+          <div class="subtitle">Praat / Parselmouth</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step orange">HNR (dB)</div>
+            <div class="step orange">jitter_local</div>
+            <div class="step orange">shimmer_local</div>
+            <div class="step orange">H1_H2</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">📈 Spectral</div>
+          <div class="subtitle">librosa MFCC</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step">mfcc_mean_0 … mfcc_mean_12</div>
+            <div class="step">mfcc_std_0 … mfcc_std_12</div>
+            <div class="step">(26 features total)</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">🔬 eGeMAPS</div>
+          <div class="subtitle">EgemapsExtractor<br>OpenSMILE</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step purple">spectralFlux_sma3_amean / stddevNorm</div>
+            <div class="step purple">mfcc1–4_sma3_amean</div>
+            <div class="step purple">F0semitoneFrom27.5Hz mean / std</div>
+            <div class="step purple">F1/F2/F3 frequency + bandwidth</div>
+            <div class="step purple">loudness mean / std</div>
+            <div class="step purple">shimmerLocaldB mean / std</div>
+            <div class="step purple">loudnessPeaksPerSec</div>
+            <div class="step purple">VoicedSegmentsPerSec</div>
+            <div class="step purple">MeanVoicedSegmentLengthSec</div>
+            <div class="step purple">jitterLocal mean / std</div>
+            <div class="step purple">HNRdBACF mean / std</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">😶 Emotion</div>
+          <div class="subtitle">MERaLiON-SER-v1<br>GPU/MPS</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step red">segments: 7.5s windows, 50% overlap</div>
+            <div class="step red">neutral / happy / sad / angry</div>
+            <div class="step red">surprised / fearful / disgusted</div>
+            <div class="step red">confidence per segment</div>
+            <div class="step red">valence / arousal / dominance (VAD)</div>
+            <div class="step red">L2 confidence penalty ×0.85</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">📊 Aggregates</div>
+          <div class="subtitle">VoiceAnalyzer</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step">dominant_emotion + ratio</div>
+            <div class="step">valence_mean / std</div>
+            <div class="step">arousal_mean / std</div>
+            <div class="step">dominance_mean</div>
+            <div class="step">emotion_volatility</div>
+            <div class="step">stress_index</div>
+            <div class="step">confidence_score</div>
+            <div class="step">arc_type</div>
+            <div class="step">emotional_shifts</div>
+            <div class="step">stress_segments</div>
+            <div class="step">peak_arousal_time</div>
+            <div class="step">neutral_ratio</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">💪 Motivation</div>
+          <div class="subtitle">MotivationScorer<br>deterministic</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step blue">motivation_score (0–100)</div>
+            <div class="step blue">motivation_level: Low / Medium / High</div>
+            <div class="step blue">components: energy · pace · pauses · pitch · voice_quality · rhythm · speech_ratio · emotion</div>
+            <div class="step blue">voice_indicators (text list)</div>
+            <div class="step blue">pattern (text description)</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="stage">
+        <div class="stage-label">
+          <div class="title">📤 Output</div>
+          <div class="subtitle">JSON</div>
+        </div>
+        <div class="stage-body">
+          <div class="step-row">
+            <div class="step green">full JSON response via /assess</div>
+            <div class="step green">granular_features (43 flat keys)</div>
+            <div class="step green">l2_adjustments</div>
+            <div class="step green">paralinguistic_summary (text)</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- DIAGRAM TAB -->
+  <div id="tab-diagram" class="tab-panel">
+    <div class="mermaid-wrap">
+      <div class="mermaid">
 flowchart TD
-    A([🎙️ Audio File\n.m4a / .webm / .mp3]) --> B
+    A([🎙️ Audio File\n.webm / .wav / .mp3 / .m4a]) --> B[Load Audio\nlibrosa @ 16kHz mono]
 
-    subgraph STEP1["Step 1 — Load & Transcribe"]
-        B[Load Audio\nResample to 16kHz] --> C{skip_transcription?}
-        C -- No --> D[Whisper Model\nSpeech → Text]
-        C -- Yes --> E[Voice-only mode\nword_count = 0]
-        D --> F[Language Detection\nwhisper-base on CPU]
-        F --> G{confidence > 0.97?}
-        G -- Yes --> H[native_english]
-        G -- No --> I[non_native_english\nor sea_english]
-    end
+    B --> C1[ProsodyExtractor\nlibrosa]
+    B --> C2[EgemapsExtractor\nOpenSMILE]
+    B --> C3[VoiceAnalyzer\nPraat + MERaLiON]
 
-    subgraph STEP2["Step 2 — Prosody  librosa"]
-        J[Pitch F0\nmean · std · slope · range]
-        K[Energy\nmean · std · range]
-        L[Speaking Rate\nWPM — cap 220 L2 / 250 native]
-        M[Pauses\ncount · duration · ratio]
-        N[Rhythm Regularity]
-    end
+    C1 --> D1[(Prosody\n16 features)]
+    C2 --> D2[(eGeMAPS\n24 grouped features)]
 
-    subgraph STEP3["Step 3 — Voice Quality  Praat/parselmouth"]
-        O[HNR\nHarmonics-to-Noise Ratio]
-        P[Jitter\npitch micro-variation]
-        Q[Shimmer\nloudness micro-variation]
-        R[H1-H2\nbreathiness]
-    end
+    C3 --> E1[Voice Quality\nPraat/Parselmouth]
+    C3 --> E2[Spectral / MFCC\nlibrosa]
+    C3 --> E3[Emotion Timeline\nMERaLiON-SER-v1\n7.5s segments]
 
-    subgraph STEP4["Step 4 — Spectral  librosa"]
-        S[MFCC 1–13\nmean + std = 26 values]
-    end
+    E1 --> D3[(Voice Quality\nHNR · jitter · shimmer · H1H2)]
+    E2 --> D4[(Spectral\n26 MFCC features)]
+    E3 --> D5[(Emotion Timeline\n37 segments × 11 features)]
+    E3 --> D6[(Emotion Aggregates\n17 features)]
 
-    subgraph STEP5["Step 5 — Emotion Timeline  MERaLiON-SER-v1"]
-        T[Split audio into\n5s windows · step=2s] --> U[MERaLiON Transformer\nHuggingFace]
-        U --> V[7 emotion probs per segment\nangry · happy · sad · neutral\nfearful · surprised · disgusted]
-        V --> W[Temperature Scaling\nsoften overconfident scores]
-        W --> X[Sticky Smoothing\nprevent rapid flipping]
-        X --> Y{L2 speaker?}
-        Y -- Yes --> Z[Confidence × 0.85\npenalty for accented speech]
-        Y -- No --> AA[Keep as-is]
-        Z --> AB[VAD per segment\nValence / Arousal / Dominance]
-        AA --> AB
-    end
+    D1 --> F[MotivationScorer\ndeterministic formula]
+    D3 --> F
+    D6 --> F
 
-    subgraph STEP6["Step 6 — eGeMAPS  openSMILE"]
-        AC[88 acoustic features\nloudness · F0 · MFCC\njitter · shimmer · spectral flux]
-    end
+    F --> G[(Motivation\nscore · level · components)]
 
-    subgraph STEP7["Step 7 — LLM Assessment  Groq API"]
-        AD[Module 1: Basic LLM\nProsody + Voice Quality\n+ Emotion Summary → Big Five]
-        AE[Module 2: Approximate\neGeMAPS + Timeline only\nno transcript]
-        AF[Module 3: Enriched Ablation\nre-score with emotion\ntimeline enrichment]
-        AD --> AG[Weighted Average\nby confidence]
-        AE --> AG
-        AF --> AG
-        AG --> AH{L2 speaker?}
-        AH -- Yes --> AI[Extraversion +10\nNeuroticism −13]
-        AH -- No --> AJ[Keep scores]
-    end
+    D1 --> H[JSON Builder]
+    D2 --> H
+    D3 --> H
+    D4 --> H
+    D5 --> H
+    D6 --> H
+    G --> H
 
-    subgraph STEP8["Step 8 — Motivation & Engagement  rule-based"]
-        AK[Pace score\nWPM vs profile thresholds]
-        AL[Energy score\nmean + std]
-        AM[Pause score\npauses per minute]
-        AN[Pitch dynamics\nslope + variance]
-        AO[Emotional trend\nvalence slope]
-        AK & AL & AM & AN & AO --> AP[Motivation Score 0–100\nEngagement Score 0–100]
-    end
+    H --> I([📦 JSON Output\nall features])
 
-    subgraph STEP9["Step 9 — Output Assembly  main.py"]
-        AQ[Final Assessment\nweighted Big Five + CI + warnings]
-        AR[Strengths & Dev Areas\nfrom final scores]
-        AS[HR Summary\n3-sentence narrative]
-        AT[Paralinguistic Summary\nL2-aware text for LLM]
-        AU[Calibration Warnings\nspread > 20 across modules]
-        AV[L2 Adjustments\nnotes + relabeled emotions]
-    end
+    style A fill:#1e3a5f,stroke:#2563eb,color:#93c5fd
+    style I fill:#14532d,stroke:#16a34a,color:#86efac
+    style E3 fill:#2e1065,stroke:#7c3aed,color:#c4b5fd
+    style MERaLiON fill:#2e1065,stroke:#7c3aed
+    style F fill:#1e3a5f,stroke:#2563eb,color:#93c5fd
+      </div>
+    </div>
 
-    H --> STEP2
-    I --> STEP2
-    E --> STEP2
-    D --> STEP2
-
-    STEP2 --> STEP3
-    STEP2 --> STEP4
-    STEP2 --> STEP5
-    STEP2 --> STEP6
-    STEP2 --> STEP7
-    STEP3 --> STEP7
-    STEP4 --> STEP7
-    STEP5 --> STEP7
-    STEP5 --> STEP8
-    STEP6 --> STEP7
-    STEP7 --> STEP9
-    STEP8 --> STEP9
-
-    STEP9 --> OUT([📄 JSON Report\nBig Five · Emotion Timeline\nMotivation · HR Summary\nCalibration Warnings])
-
-    style STEP1 fill:#1a1a2e,stroke:#4a90d9,color:#fff
-    style STEP2 fill:#16213e,stroke:#4a90d9,color:#fff
-    style STEP3 fill:#0f3460,stroke:#4a90d9,color:#fff
-    style STEP4 fill:#1a1a2e,stroke:#4a90d9,color:#fff
-    style STEP5 fill:#2d1b33,stroke:#e94560,color:#fff
-    style STEP6 fill:#0f3460,stroke:#4a90d9,color:#fff
-    style STEP7 fill:#2e2a1a,stroke:#f5a623,color:#fff
-    style STEP8 fill:#1a2e1a,stroke:#7ed321,color:#fff
-    style STEP9 fill:#0f2a0f,stroke:#7ed321,color:#fff
-    style A fill:#e94560,stroke:#fff,color:#fff
-    style OUT fill:#7ed321,stroke:#fff,color:#000
+    <div class="card" style="margin-top:20px">
+      <h3><span class="icon">🗂️</span> Source Files</h3>
+      <div class="step-row">
+        <div class="step blue">api.py — FastAPI server</div>
+        <div class="step blue">slim_pipeline.py — orchestrator</div>
+        <div class="step green">src/extractors/prosody.py</div>
+        <div class="step green">src/extractors/egemaps.py</div>
+        <div class="step green">src/extractors/emotion_meralion.py</div>
+        <div class="step green">src/extractors/emotion_fusion.py</div>
+        <div class="step green">src/extractors/voice_analyzer.py</div>
+        <div class="step purple">src/assessment/motivation_scorer.py</div>
+        <div class="step orange">src/utils/audio.py</div>
+        <div class="step orange">src/utils/device.py</div>
+        <div class="step orange">src/utils/scoring.py</div>
+        <div class="step">src/config.py</div>
+        <div class="step">src/models/schemas.py</div>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- ═══════════════════════════════════════════════════════ TAB 2 -->
-<div id="tab2" class="diagram-panel">
-  <div class="diagram-title">Data Flow — Features → Modules → Output</div>
-  <div class="diagram-desc">Which extracted features feed into which scoring modules and output fields</div>
-  <div class="mermaid-wrap">
-    <div class="mermaid">
-flowchart LR
-    subgraph AUDIO["🎙️ Raw Audio"]
-        A1[Waveform\n16kHz mono]
-    end
+  <!-- API TAB -->
+  <div id="tab-api" class="tab-panel">
+    <div class="card">
+      <h3><span class="icon">🚀</span> Start Server</h3>
+      <div style="background:#0f172a;border-radius:8px;padding:16px;font-family:monospace;font-size:0.85rem;color:#93c5fd;">
+        python api.py<br>
+        python api.py --port 8080<br>
+        python api.py --host 127.0.0.1 --port 8000
+      </div>
+      <div class="info-row" style="margin-top:12px">
+        <div class="info-pill"><strong>workers=1</strong> — model loaded once at startup</div>
+        <div class="info-pill">Docs at <strong>/docs</strong> (Swagger UI)</div>
+      </div>
+    </div>
 
-    subgraph FEATURES["Feature Extraction Layer"]
-        direction TB
+    <div class="api-flow">
+      <div class="api-req">
+        <div class="api-method" style="background:#065f46">GET</div>
+        <div class="api-path">/health</div>
+        <div class="api-desc">Server status + model loaded + device</div>
+      </div>
+      <div style="background:#0f172a;border-radius:0 0 8px 8px;padding:12px 18px;border:1px solid #334155;border-top:none;margin-top:-10px;font-family:monospace;font-size:0.78rem;color:#64748b;">
+        → { "status": "ok", "model_loaded": true, "device": "cuda", "model": "MERaLiON/MERaLiON-SER-v1" }
+      </div>
 
-        subgraph PROS["Prosody — librosa"]
-            P1[f0_mean / f0_std\nf0_slope / f0_range]
-            P2[energy_mean / energy_std]
-            P3[speaking_rate_wpm]
-            P4[pauses_per_minute\npause_duration_mean]
-            P5[rhythm_regularity\nvoiced_ratio]
-        end
+      <div class="api-req" style="margin-top:16px">
+        <div class="api-method">POST</div>
+        <div class="api-path">/assess</div>
+        <div class="api-desc">Upload one audio → full feature JSON</div>
+      </div>
+      <div style="background:#0f172a;border-radius:0 0 8px 8px;padding:12px 18px;border:1px solid #334155;border-top:none;margin-top:-10px;font-family:monospace;font-size:0.78rem;color:#64748b;">
+        Form: audio (file), language_profile (str, default: non_native_english)<br>
+        → Full JSON with all feature groups
+      </div>
 
-        subgraph VQ["Voice Quality — Praat"]
-            V1[HNR dB]
-            V2[jitter %]
-            V3[shimmer %]
-            V4[H1-H2 breathiness]
-        end
+      <div class="api-req" style="margin-top:16px">
+        <div class="api-method">POST</div>
+        <div class="api-path">/assess/batch</div>
+        <div class="api-desc">Upload multiple files → array of results</div>
+      </div>
+      <div style="background:#0f172a;border-radius:0 0 8px 8px;padding:12px 18px;border:1px solid #334155;border-top:none;margin-top:-10px;font-family:monospace;font-size:0.78rem;color:#64748b;">
+        Form: files[] (multiple), language_profile (str)<br>
+        → { results: [...], errors: [...], total, success, failed }
+      </div>
+    </div>
 
-        subgraph SPEC["Spectral — librosa"]
-            S1[MFCC 1–13\nmean + std]
-        end
-
-        subgraph EMO["Emotion — MERaLiON-SER-v1"]
-            E1[Per-segment probs\n7 emotions]
-            E2[Valence −1→+1]
-            E3[Arousal −1→+1]
-            E5[arc_type]
-            E6[valence_slope\narousal_slope]
-            E7[stress_index\nconfidence_score]
-        end
-
-        subgraph EGEM["eGeMAPS — openSMILE"]
-            G1[88 acoustic features]
-        end
-
-        subgraph TRANS["Transcript — Whisper"]
-            T1[word_count\nlanguage / profile]
-            T2[text content]
-        end
-    end
-
-    subgraph SCORING["Scoring Layer"]
-        direction TB
-
-        subgraph MOT["Motivation — rule-based"]
-            M1[pace_score]
-            M2[energy_score]
-            M3[pause_score]
-            M4[pitch_dynamics]
-            M5[emotional_trend]
-            M1 & M2 & M3 & M4 & M5 --> M6[motivation 0–100\nengagement 0–100]
-        end
-
-        subgraph LLM1["Module 1 — Basic LLM"]
-            L1[Big Five\n+ confidence]
-        end
-
-        subgraph LLM2["Module 2 — Approximate"]
-            L2[Big Five range\nvoice-only]
-        end
-
-        subgraph LLM3["Module 3 — Enriched"]
-            L3[Big Five updated\nwith emotion]
-        end
-
-        subgraph FINAL["Final Assessment"]
-            F1[Weighted Average\nby confidence]
-            F2{L2 speaker?}
-            F3[E +10 · N −13]
-            F4[Final Big Five\n+ CI + sources]
-            F1 --> F2
-            F2 -- yes --> F3 --> F4
-            F2 -- no --> F4
-        end
-    end
-
-    subgraph OUTPUT["📄 JSON Output"]
-        O1[personality_assessment]
-        O2[final_assessment\nper-module sources]
-        O3[emotion_summary]
-        O4[motivation_engagement]
-        O5[paralinguistic_summary]
-        O6[hr_summary]
-        O7[calibration_warnings]
-        O8[l2_adjustments]
-    end
-
-    A1 --> PROS & VQ & SPEC & EMO & EGEM & TRANS
-
-    P1 & P2 & P3 & P4 --> M1 & M2 & M3 & M4
-    E6 --> M5
-
-    P1 & P2 & P3 & P4 & P5 --> L1
-    V1 & V2 & V3 & V4 --> L1
-    E1 & E2 & E3 & E5 & E6 & E7 --> L1
-    T1 & T2 --> L1
-
-    G1 --> L2
-    E1 & E2 & E3 --> L2
-
-    E1 & E5 & E6 & E7 --> L3
-    L1 --> L3
-
-    L1 --> F1
-    L2 --> F1
-    L3 --> F1
-
-    F4 --> O2
-    L1 --> O1
-    M6 --> O4
-    EMO --> O3
-    F4 & O3 & O4 --> O6
-    F4 --> O7
-    TRANS --> O8
-    P1 & P2 & P3 & VQ & EMO --> O5
-
-    style AUDIO fill:#e94560,stroke:#fff,color:#fff
-    style PROS fill:#1a1a2e,stroke:#4a90d9,color:#fff
-    style VQ fill:#0f3460,stroke:#4a90d9,color:#fff
-    style SPEC fill:#16213e,stroke:#4a90d9,color:#fff
-    style EMO fill:#2d1b33,stroke:#e94560,color:#fff
-    style EGEM fill:#1a1a2e,stroke:#4a90d9,color:#fff
-    style TRANS fill:#16213e,stroke:#4a90d9,color:#fff
-    style MOT fill:#1a2e1a,stroke:#7ed321,color:#fff
-    style LLM1 fill:#2e2a1a,stroke:#f5a623,color:#fff
-    style LLM2 fill:#2e2a1a,stroke:#f5a623,color:#fff
-    style LLM3 fill:#2e2a1a,stroke:#f5a623,color:#fff
-    style FINAL fill:#1a2e1a,stroke:#7ed321,color:#fff
-    style OUTPUT fill:#0d1f0d,stroke:#7ed321,color:#fff
-    style FEATURES fill:#0d0d1a,stroke:#2a2a4a,color:#fff
-    style SCORING fill:#0d0d1a,stroke:#2a2a4a,color:#fff
+    <div class="card" style="margin-top:20px">
+      <h3><span class="icon">💻</span> Example Request</h3>
+      <div style="background:#0f172a;border-radius:8px;padding:16px;font-family:monospace;font-size:0.8rem;color:#93c5fd;line-height:1.8;">
+        <span style="color:#64748b"># curl</span><br>
+        curl -X POST http://localhost:8000/assess \<br>
+        &nbsp;&nbsp;-F "audio=@interview.webm" \<br>
+        &nbsp;&nbsp;-F "language_profile=non_native_english"<br><br>
+        <span style="color:#64748b"># python</span><br>
+        import requests<br>
+        resp = requests.post("http://localhost:8000/assess",<br>
+        &nbsp;&nbsp;files={"audio": open("interview.webm","rb")},<br>
+        &nbsp;&nbsp;data={"language_profile": "non_native_english"})<br>
+        result = resp.json()
+      </div>
     </div>
   </div>
-</div>
 
-<!-- ═══════════════════════════════════════════════════════ TAB 3 -->
-<div id="tab3" class="diagram-panel">
-  <div class="diagram-title">Voice Features → Big Five Traits</div>
-  <div class="diagram-desc">Which acoustic signals map to which personality dimensions (with L2 adjustments)</div>
-  <div class="mermaid-wrap">
-    <div class="mermaid">
-flowchart TD
-    subgraph VOICE["🎙️ Voice Features"]
-        F1[pitch_variance\nf0_std]
-        F2[speaking_rate_wpm]
-        F3[energy_mean\nenergy_std]
-        F4[pauses_per_minute\npause_duration]
-        F5[HNR · jitter · shimmer]
-        F6[valence_mean\nvalence_slope]
-        F7[arousal_mean\narousal_slope]
-        F8[emotion_volatility\nemotion_distribution]
-        F9[rhythm_regularity]
-        F10[pitch_slope]
-    end
-
-    subgraph BIG5["Big Five Traits"]
-        O[🟣 Openness]
-        C[🔵 Conscientiousness]
-        E[🟢 Extraversion]
-        A[🟡 Agreeableness]
-        N[🔴 Neuroticism]
-    end
-
-    subgraph L2["L2 Adjustments\nnon_native_english"]
-        LA[Extraversion\nfinal score +10\nfast speech = cognitive effort]
-        LN[Neuroticism\nfinal score −13\njitter = articulation difficulty]
-    end
-
-    F1 -->|high variety = open| O
-    F8 -->|varied emotions = open| O
-    F7 -->|high arousal = open| O
-
-    F9 -->|regular rhythm = conscientious| C
-    F4 -->|few pauses = disciplined| C
-    F7 -->|stable arousal = conscientious| C
-
-    F2 -->|fast speech = extraverted| E
-    F3 -->|high energy = extraverted| E
-    F1 -->|expressive pitch = extraverted| E
-    F10 -->|rising pitch = engaged| E
-
-    F6 -->|positive valence = agreeable| A
-    F5 -->|clear voice HNR = agreeable| A
-
-    F5 -->|high jitter = neurotic| N
-    F6 -->|negative valence = neurotic| N
-    F8 -->|volatile emotions = neurotic| N
-    F4 -->|many pauses = anxious| N
-
-    E --> LA
-    N --> LN
-
-    style O fill:#6a0dad,stroke:#fff,color:#fff
-    style C fill:#1a5276,stroke:#fff,color:#fff
-    style E fill:#1e8449,stroke:#fff,color:#fff
-    style A fill:#7d6608,stroke:#fff,color:#fff
-    style N fill:#922b21,stroke:#fff,color:#fff
-    style VOICE fill:#1a1a2e,stroke:#4a90d9,color:#fff
-    style BIG5 fill:#0d0d1a,stroke:#4a90d9,color:#fff
-    style L2 fill:#2d1b33,stroke:#e94560,color:#fff
-    style LA fill:#1e8449,stroke:#7ed321,color:#fff
-    style LN fill:#922b21,stroke:#e94560,color:#fff
-    </div>
-  </div>
 </div>
 
 <script>
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: 'dark',
-    themeVariables: {
-      background: '#111122',
-      primaryColor: '#1a1a2e',
-      primaryTextColor: '#e0e0e0',
-      primaryBorderColor: '#4a90d9',
-      lineColor: '#4a90d9',
-      secondaryColor: '#16213e',
-      tertiaryColor: '#0f3460',
-      edgeLabelBackground: '#1a1a2e',
-      clusterBkg: '#0d0d1a',
-      clusterBorder: '#2a2a4a',
-    },
-    flowchart: {
-      curve: 'basis',
-      padding: 20,
-    }
-  });
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: { background: '#0f1117', primaryColor: '#1e3a5f', primaryTextColor: '#93c5fd', lineColor: '#475569' }});
 
-  function showTab(id, btn) {
-    document.querySelectorAll('.diagram-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-    btn.classList.add('active');
+  function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
   }
 </script>
-
 </body>
 </html>
